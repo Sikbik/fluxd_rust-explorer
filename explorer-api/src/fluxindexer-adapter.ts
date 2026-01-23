@@ -5,6 +5,21 @@ function toNumber(value: unknown, fallback = 0): number {
   return Number.isFinite(asNumber) ? asNumber : fallback;
 }
 
+function toOptionalNumber(value: unknown): number | null {
+  const asNumber = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(asNumber) ? asNumber : null;
+}
+
+function confirmationsFromHeight(bestHeight: number, height: number | null): number {
+  if (height == null) return 0;
+
+  const h = Math.trunc(height);
+  const tip = Math.trunc(bestHeight);
+
+  if (h < 0 || tip < h) return 0;
+  return tip - h + 1;
+}
+
 function toString(value: unknown, fallback = ''): string {
   return typeof value === 'string' ? value : value == null ? fallback : String(value);
 }
@@ -566,7 +581,7 @@ export async function getAddressTransactions(
         toAddresses,
         toAddressCount: io?.toAddressCount ?? toAddresses.length,
         selfTransfer: fromAddresses.includes(address) && toAddresses.includes(address),
-        confirmations: row.tx.height > 0 ? Math.max(0, bestHeight - row.tx.height + 1) : 0,
+        confirmations: confirmationsFromHeight(bestHeight, row.tx.height > 0 ? row.tx.height : null),
         isCoinbase,
       };
     }),
@@ -586,14 +601,14 @@ export async function getAddressUtxos(env: Env, address: string): Promise<Array<
   const tipHeight = await fluxdGet<number>(env, 'getblockcount', { params: JSON.stringify([]) });
 
   return utxos.map((u) => {
-    const height = toNumber(u.height, 0);
+    const height = toOptionalNumber(u.height);
     const satoshis = toNumber(u.satoshis, 0);
-    const confirmations = height > 0 ? Math.max(0, tipHeight - height + 1) : 0;
+    const confirmations = confirmationsFromHeight(tipHeight, height);
     return {
       txid: toString(u.txid),
       vout: toNumber(u.outputIndex),
       value: toSatoshiString(satoshis),
-      height,
+      height: height ?? 0,
       confirmations,
     };
   });
