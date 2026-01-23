@@ -24,10 +24,6 @@ function toString(value: unknown, fallback = ''): string {
   return typeof value === 'string' ? value : value == null ? fallback : String(value);
 }
 
-function toSatoshiString(value: unknown): string {
-  return String(Math.trunc(toNumber(value, 0)));
-}
-
 function toSatoshiBigInt(value: unknown): bigint {
   if (typeof value === 'bigint') return value;
   if (typeof value === 'number' && Number.isFinite(value)) return BigInt(Math.trunc(value));
@@ -39,6 +35,10 @@ function toSatoshiBigInt(value: unknown): bigint {
     }
   }
   return 0n;
+}
+
+function toSatoshiString(value: unknown): string {
+  return toSatoshiBigInt(value).toString();
 }
 
 export interface FluxIndexerBlockResponse {
@@ -644,18 +644,21 @@ export async function getSupplyStats(env: Env): Promise<{
   const chainInfo = await fluxdGet<any>(env, 'getblockchaininfo', { params: JSON.stringify([]) });
   const now = new Date().toISOString();
 
-  const totalSupplyZat = toNumber(chainInfo.total_supply_zat ?? 0, 0);
+  const totalSupplyZat = toSatoshiBigInt(chainInfo.total_supply_zat ?? 0);
 
   const pools = Array.isArray(chainInfo.valuePools) ? chainInfo.valuePools : [];
-  const shieldedPoolZat = pools.reduce((acc: number, pool: any) => acc + toNumber(pool?.chainValueZat ?? pool?.chainValue_zat ?? 0, 0), 0);
+  const shieldedPoolZat = pools.reduce(
+    (acc: bigint, pool: any) => acc + toSatoshiBigInt(pool?.chainValueZat ?? pool?.chainValue_zat ?? 0),
+    0n
+  );
 
-  const transparentSupplyZat = Math.max(0, totalSupplyZat - shieldedPoolZat);
+  const transparentSupplyZat = totalSupplyZat > shieldedPoolZat ? (totalSupplyZat - shieldedPoolZat) : 0n;
 
   return {
     blockHeight: toNumber(chainInfo.blocks, 0),
-    transparentSupply: toSatoshiString(transparentSupplyZat),
-    shieldedPool: toSatoshiString(shieldedPoolZat),
-    totalSupply: toSatoshiString(totalSupplyZat),
+    transparentSupply: transparentSupplyZat.toString(),
+    shieldedPool: shieldedPoolZat.toString(),
+    totalSupply: totalSupplyZat.toString(),
     lastUpdate: now,
     timestamp: now,
   };
