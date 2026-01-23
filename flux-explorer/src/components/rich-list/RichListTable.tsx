@@ -29,11 +29,16 @@ import {
   Legend,
 } from "recharts";
 import type { RichListAddress } from "@/types/rich-list";
-import {
-  richListLabelMap,
-  richListCategoryColors,
-  type RichListCategory,
-} from "@/data/rich-list-labels";
+type RichListCategory = string;
+
+const richListLabelMap = new Map<string, { label?: string; category?: RichListCategory; note?: string; locked?: boolean }>();
+const richListCategoryColors: Record<string, string> = {
+  Unknown: "#6b7280",
+  "Swap Pool": "#0ea5e9",
+  "Cumulus Nodes": "#10b981",
+  "Nimbus Nodes": "#8b5cf6",
+  "Stratus Nodes": "#f59e0b",
+};
 
 interface RichListResponse {
   lastUpdate: string;

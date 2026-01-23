@@ -4,7 +4,7 @@
  * Shared types for rich list data structure used by both scanner and explorer
  */
 
-import type { RichListCategory } from "@/data/rich-list-labels";
+export type RichListCategory = string;
 
 export interface RichListAddress {
   rank: number;

@@ -143,8 +143,10 @@ async function proxyRequest(
       }
     }
 
-    // Make the request to the backend
-    const response = await fetch(targetUrl, options);
+    const response = await fetch(targetUrl, {
+      ...options,
+      signal: AbortSignal.timeout(10_000),
+    });
 
     // Get response body
     const responseBody = await response.text();
