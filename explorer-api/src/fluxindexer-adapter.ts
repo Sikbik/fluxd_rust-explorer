@@ -28,6 +28,19 @@ function toSatoshiString(value: unknown): string {
   return String(Math.trunc(toNumber(value, 0)));
 }
 
+function toSatoshiBigInt(value: unknown): bigint {
+  if (typeof value === 'bigint') return value;
+  if (typeof value === 'number' && Number.isFinite(value)) return BigInt(Math.trunc(value));
+  if (typeof value === 'string' && value.trim().length > 0) {
+    try {
+      return BigInt(value.trim());
+    } catch {
+      return 0n;
+    }
+  }
+  return 0n;
+}
+
 export interface FluxIndexerBlockResponse {
   hash: string;
   size?: number;
@@ -262,21 +275,27 @@ export async function getTransaction(env: Env, txid: string, includeHex: boolean
 }
 
 export async function getAddressSummary(env: Env, address: string): Promise<{ address: string; balance: string; totalReceived: string; totalSent: string; unconfirmedBalance: string; unconfirmedTxs: number; txs: number; transactions: Array<{ txid: string }> }> {
-  const balance = await fluxdGet<any>(env, 'getaddressbalance', { params: JSON.stringify([{ address }]) });
+  const [balance, txids, mempoolDeltas] = await Promise.all([
+    fluxdGet<any>(env, 'getaddressbalance', { params: JSON.stringify([{ address }]) }),
+    fluxdGet<string[]>(env, 'getaddresstxids', { params: JSON.stringify([{ addresses: [address] }]) }),
+    fluxdGet<any[]>(env, 'getaddressmempool', { params: JSON.stringify([{ addresses: [address] }]) }),
+  ]);
 
-  const satBalance = toNumber(balance.balance);
-  const satReceived = toNumber(balance.received);
-  const satSent = Math.max(0, satReceived - satBalance);
+  const satBalance = toSatoshiBigInt(balance.balance);
+  const satReceived = toSatoshiBigInt(balance.received);
+  const satSent = satReceived > satBalance ? (satReceived - satBalance) : 0n;
 
-  const txids = await fluxdGet<string[]>(env, 'getaddresstxids', { params: JSON.stringify([{ addresses: [address] }]) });
+  const deltas = Array.isArray(mempoolDeltas) ? mempoolDeltas : [];
+  const unconfirmedBalance = deltas.reduce((acc: bigint, row: any) => acc + toSatoshiBigInt(row?.satoshis), 0n);
+  const unconfirmedTxs = new Set(deltas.map((row: any) => toString(row?.txid)).filter((id) => id.length > 0)).size;
 
   return {
     address,
-    balance: String(satBalance),
-    totalReceived: String(satReceived),
-    totalSent: String(satSent),
-    unconfirmedBalance: '0',
-    unconfirmedTxs: 0,
+    balance: satBalance.toString(),
+    totalReceived: satReceived.toString(),
+    totalSent: satSent.toString(),
+    unconfirmedBalance: unconfirmedBalance.toString(),
+    unconfirmedTxs,
     txs: Array.isArray(txids) ? txids.length : 0,
     transactions: Array.isArray(txids) ? txids.slice(-25).reverse().map((id) => ({ txid: toString(id) })) : [],
   };
