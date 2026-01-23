@@ -1,0 +1,32 @@
+services:
+  explorer-api:
+    build:
+      context: ./explorer-api
+    container_name: explorer-api
+    environment:
+      - PORT=42067
+      - FLUXD_RPC_URL=${FLUXD_RPC_URL:-http://127.0.0.1:16124}
+      - FLUXD_RPC_AUTH_MODE=${FLUXD_RPC_AUTH_MODE:-none}
+      - FLUXD_RPC_USER=${FLUXD_RPC_USER:-}
+      - FLUXD_RPC_PASS=${FLUXD_RPC_PASS:-}
+    ports:
+      - "42067:42067"
+    restart: unless-stopped
+
+  flux-explorer:
+    build:
+      context: ./flux-explorer
+      dockerfile: Dockerfile
+    container_name: flux-explorer
+    environment:
+      - NODE_ENV=production
+      - NEXT_TELEMETRY_DISABLED=1
+      - HOSTNAME=0.0.0.0
+      - PORT=42069
+      - SERVER_API_URL=http://explorer-api:42067
+      - NEXT_PUBLIC_API_URL=http://127.0.0.1:42067
+    depends_on:
+      - explorer-api
+    ports:
+      - "42069:42069"
+    restart: unless-stopped

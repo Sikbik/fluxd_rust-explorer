@@ -1,0 +1,50 @@
+services:
+  fluxd:
+    build:
+      context: ./fluxd_rust
+      dockerfile: Dockerfile
+    container_name: fluxd
+    restart: unless-stopped
+    ports:
+      - "16125:16125"
+      - "127.0.0.1:16124:16124"
+      - "8080:8080"
+    volumes:
+      - fluxd-data:/data
+    command:
+      - "--network"
+      - "mainnet"
+      - "--backend"
+      - "fjall"
+      - "--data-dir"
+      - "/data"
+      - "--params-dir"
+      - "/data/params"
+      - "--fetch-params"
+      - "--rpc-addr"
+      - "0.0.0.0:16124"
+      - "--rpc-user"
+      - "${FLUXD_RPC_USER:-flux}"
+      - "--rpc-pass"
+      - "${FLUXD_RPC_PASS:-flux}"
+      - "--rpc-allow-ip"
+      - "0.0.0.0/0"
+      - "--dashboard-addr"
+      - "0.0.0.0:8080"
+
+  explorer-api:
+    depends_on:
+      - fluxd
+    environment:
+      - FLUXD_RPC_URL=http://fluxd:16124
+      - FLUXD_RPC_AUTH_MODE=basic
+      - FLUXD_RPC_USER=${FLUXD_RPC_USER:-flux}
+      - FLUXD_RPC_PASS=${FLUXD_RPC_PASS:-flux}
+
+  flux-explorer:
+    volumes:
+      - explorer-data:/app/data
+
+volumes:
+  fluxd-data:
+  explorer-data:

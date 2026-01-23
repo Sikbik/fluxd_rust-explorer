@@ -1,0 +1,41 @@
+# --- Global ignores (repo root) ---
+
+# Ignore ALL markdown by default
+*.md
+
+# ...except allowlisted docs
+!README.md
+!fluxd_rust/docs/**/*.md
+
+
+# Node/Next
+node_modules/
+.next/
+out/
+dist/
+
+# Rust
+**/target/
+
+# Cargo local caches (never commit)
+**/.cargo/
+
+# Local data / state
+**/data/
+**/data*/
+
+# Env / secrets
+.env
+.env.*
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/
+
+
+# Logs
+*.log
+
+# Keep this even if nested ignores exist
+!.gitignore

@@ -1,0 +1,11 @@
+[package]
+name = "fluxd-primitives"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[dependencies]
+fluxd-consensus = { path = "../consensus" }
+ripemd = "0.1"
+sha2 = "0.10"

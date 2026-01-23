@@ -1,0 +1,15 @@
+[package]
+name = "fluxd-storage"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[dependencies]
+fjall = { version = "2.11.2", optional = true }
+fluxd-log = { path = "../log" }
+smallvec = { version = "1.13", features = ["const_generics"] }
+
+[features]
+default = []
+fjall = ["dep:fjall"]

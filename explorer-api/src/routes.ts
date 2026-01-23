@@ -1,0 +1,417 @@
+import express from 'express';
+import type { Express, Request, Response } from 'express';
+import type { Env } from './env.js';
+import { getDaemonStatus } from './fluxd-rpc.js';
+import {
+  getAddressSummary,
+  getAddressTransactions,
+  getAddressUtxos,
+  getBlockByHash,
+  getBlockByHeight,
+  getLatestBlocks,
+  getBlocksRange,
+  getTransaction,
+  getSupplyStats,
+  getDashboardStats,
+  getRichList,
+} from './fluxindexer-adapter.js';
+import { fluxdGet } from './fluxindexer-adapter.js';
+
+function toInt(value: unknown): number | null {
+  const n = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(n)) return null;
+  return Math.trunc(n);
+}
+
+export function registerRoutes(app: Express, env: Env) {
+  app.get('/health', (_req: Request, res: Response) => {
+    res.status(200).json({ ok: true, service: 'explorer-api' });
+  });
+
+  let statusCache:
+    | { at: number; value: unknown }
+    | null = null;
+
+  app.get('/api/v1/status', async (_req: Request, res: Response) => {
+    try {
+      const now = Date.now();
+      const cached = statusCache;
+      if (cached && now - cached.at < 2000) {
+        res.status(200).json(cached.value);
+        return;
+      }
+
+      const status = await getDaemonStatus(env);
+
+      const payload = {
+        ...status,
+        indexer: {
+          syncing: false,
+          synced: true,
+          currentHeight: status.daemon?.blocks ?? 0,
+          chainHeight: status.daemon?.headers ?? 0,
+          progress: '1.0',
+          lastSyncTime: null,
+        },
+      };
+
+      statusCache = { at: now, value: payload };
+      res.status(200).json(payload);
+    } catch (error) {
+      res.status(502).json({
+        error: 'Failed to query fluxd_rust',
+        message: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  });
+
+  let latestBlocksCache: { at: number; limit: number; value: unknown } | null = null;
+
+  app.get('/api/v1/blocks/latest', async (req: Request, res: Response) => {
+    const now = Date.now();
+    const limit = toInt(req.query.limit) ?? 10;
+
+    const cached = latestBlocksCache;
+    if (cached && cached.limit === limit && now - cached.at < 15_000) {
+      res.status(200).json(cached.value);
+      return;
+    }
+
+    try {
+      const response = await getLatestBlocks(env, limit);
+      latestBlocksCache = { at: now, limit, value: response };
+      res.status(200).json(response);
+    } catch (error) {
+      if (cached && cached.limit === limit && now - cached.at < 10 * 60_000) {
+        res.status(200).json(cached.value);
+        return;
+      }
+
+      res.status(502).json({
+        error: 'Failed to query fluxd_rust',
+        message: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  });
+
+  app.get('/api/v1/blocks/range', async (req: Request, res: Response) => {
+    try {
+      const from = toInt(req.query.from);
+      const to = toInt(req.query.to);
+      if (from == null || to == null) {
+        res.status(400).json({ error: 'from and to are required' });
+        return;
+      }
+
+      const response = await getBlocksRange(env, from, to);
+      const fieldsRaw = req.query.fields != null ? String(req.query.fields) : null;
+      if (!fieldsRaw) {
+        res.status(200).json(response.blocks);
+        return;
+      }
+
+      const fields = fieldsRaw
+        .split(',')
+        .map((f) => f.trim())
+        .filter((f) => f.length > 0);
+
+      const filtered = response.blocks.map((block) => {
+        const out: Record<string, unknown> = {};
+        for (const key of fields) {
+          if (key in block) {
+            out[key] = (block as Record<string, unknown>)[key];
+          }
+        }
+        return out;
+      });
+
+      res.status(200).json(filtered);
+    } catch (error) {
+      res.status(502).json({
+        error: 'Failed to query fluxd_rust',
+        message: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  });
+
+  app.get('/api/v1/blocks/:hashOrHeight', async (req: Request, res: Response) => {
+    try {
+       const raw = String(req.query.raw ?? '').toLowerCase();
+       if (raw === '1' || raw === 'true' || raw === 'yes') {
+         const hashOrHeight = req.params.hashOrHeight;
+         const height = toInt(hashOrHeight);
+         const hash = height != null
+           ? await fluxdGet<string>(env, 'getblockhash', { params: JSON.stringify([height]) })
+           : hashOrHeight;
+         const rawblock = await fluxdGet<string>(env, 'getblock', { params: JSON.stringify([hash, 0]) });
+         res.status(200).json({ rawblock });
+         return;
+       }
+
+
+      const hashOrHeight = req.params.hashOrHeight;
+      const height = toInt(hashOrHeight);
+
+      const block = height != null ? await getBlockByHeight(env, height) : await getBlockByHash(env, hashOrHeight);
+      res.status(200).json(block);
+    } catch (error) {
+      res.status(404).json({
+        error: 'not_found',
+        message: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  });
+
+  app.get('/api/v1/transactions/:txid', async (req: Request, res: Response) => {
+    try {
+      const txid = req.params.txid;
+      const includeHex = String(req.query.includeHex ?? '').toLowerCase();
+      const wantsHex = includeHex === '1' || includeHex === 'true' || includeHex === 'yes';
+      const tx = await getTransaction(env, txid, wantsHex);
+      res.status(200).json(tx);
+    } catch (error) {
+      res.status(404).json({
+        error: 'not_found',
+        message: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  });
+
+  app.post('/api/v1/transactions/batch', express.json(), async (req: Request, res: Response) => {
+    try {
+      const txids = Array.isArray(req.body?.txids) ? req.body.txids : [];
+      if (txids.length === 0) {
+        res.status(400).json({ error: 'txids is required' });
+        return;
+      }
+
+      const maxConcurrency = Math.max(1, Math.min(toInt(req.query.concurrency) ?? 8, 32));
+
+      const ids = txids.map((id: unknown) => String(id));
+      const transactions = new Array(ids.length);
+
+      let cursor = 0;
+      const workers = Array.from({ length: Math.min(maxConcurrency, ids.length) }, async () => {
+        while (true) {
+          const idx = cursor;
+          cursor += 1;
+          if (idx >= ids.length) return;
+
+          const id = ids[idx];
+          try {
+            const tx = await getTransaction(env, id, false);
+            transactions[idx] = tx;
+          } catch (error) {
+            transactions[idx] = {
+              txid: id,
+              error: 'not_found',
+              message: error instanceof Error ? error.message : 'Unknown error',
+            };
+          }
+        }
+      });
+
+      await Promise.all(workers);
+
+      res.status(200).json({ transactions });
+    } catch (error) {
+      res.status(502).json({
+        error: 'Failed to query fluxd_rust',
+        message: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  });
+
+  app.get('/api/v1/addresses/:address', async (req: Request, res: Response) => {
+    try {
+      const address = req.params.address;
+      const response = await getAddressSummary(env, address);
+      res.status(200).json(response);
+    } catch (error) {
+      res.status(404).json({
+        error: 'not_found',
+        message: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  });
+
+  app.get('/api/v1/addresses/:address/utxos', async (req: Request, res: Response) => {
+    try {
+      const address = req.params.address;
+      const response = await getAddressUtxos(env, address);
+      res.status(200).json(response);
+    } catch (error) {
+      res.status(502).json({
+        error: 'Failed to query fluxd_rust',
+        message: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  });
+
+  app.get('/api/v1/addresses/:address/transactions', async (req: Request, res: Response) => {
+    try {
+      const address = req.params.address;
+
+      const limit = toInt(req.query.limit) ?? 25;
+      const offset = toInt(req.query.offset) ?? undefined;
+
+      const cursorHeight = toInt(req.query.cursorHeight) ?? undefined;
+      const cursorTxIndex = toInt(req.query.cursorTxIndex) ?? undefined;
+      const cursorTxid = req.query.cursorTxid != null ? String(req.query.cursorTxid) : undefined;
+
+      const fromBlock = toInt(req.query.fromBlock) ?? undefined;
+      const toBlock = toInt(req.query.toBlock) ?? undefined;
+      const fromTimestamp = toInt(req.query.fromTimestamp) ?? undefined;
+      const toTimestamp = toInt(req.query.toTimestamp) ?? undefined;
+
+      const response = await getAddressTransactions(env, address, {
+        limit,
+        offset,
+        cursorHeight,
+        cursorTxIndex,
+        cursorTxid,
+        fromBlock,
+        toBlock,
+        fromTimestamp,
+        toTimestamp,
+      });
+
+      res.status(200).json(response);
+    } catch (error) {
+      res.status(502).json({
+        error: 'Failed to query fluxd_rust',
+        message: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  });
+
+  app.get('/api/v1/sync', async (_req: Request, res: Response) => {
+    try {
+      const status = await getDaemonStatus(env);
+      const chainHeight = status.daemon?.headers ?? 0;
+      const currentHeight = status.daemon?.blocks ?? 0;
+      const percentage = chainHeight > 0 ? (currentHeight / chainHeight) * 100 : 0;
+
+      res.status(200).json({
+        indexer: {
+          syncing: currentHeight < chainHeight,
+          synced: currentHeight >= chainHeight,
+          currentHeight,
+          chainHeight,
+          progress: chainHeight > 0 ? String(currentHeight / chainHeight) : '0',
+          percentage,
+          lastSyncTime: null,
+        },
+      });
+    } catch (error) {
+      res.status(502).json({
+        error: 'Failed to query fluxd_rust',
+        message: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  });
+
+  app.get('/api/v1/stats/dashboard', async (_req: Request, res: Response) => {
+    try {
+      const response = await getDashboardStats(env);
+      res.status(200).json(response);
+    } catch (error) {
+      res.status(502).json({
+        error: 'Failed to query fluxd_rust',
+        message: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  });
+
+  app.get('/api/v1/estimatefee', async (req: Request, res: Response) => {
+    try {
+      const nbBlocks = toInt(req.query.nbBlocks) ?? 2;
+      const response = await fluxdGet<number>(env, 'estimatefee', { params: JSON.stringify([nbBlocks]) });
+      res.status(200).json(response);
+    } catch (error) {
+      res.status(502).json({
+        error: 'Failed to query fluxd_rust',
+        message: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  });
+
+  let supplyCache: { at: number; value: unknown } | null = null;
+  let supplyRefresh: Promise<void> | null = null;
+
+  async function refreshSupply(now: number): Promise<void> {
+    const response = await getSupplyStats(env);
+    supplyCache = { at: now, value: response };
+  }
+
+  app.get('/api/v1/supply', async (_req: Request, res: Response) => {
+    const now = Date.now();
+    const cached = supplyCache;
+
+    if (cached && now - cached.at < 10 * 60_000) {
+      if (now - cached.at >= 15_000 && !supplyRefresh) {
+        supplyRefresh = refreshSupply(now).finally(() => {
+          supplyRefresh = null;
+        });
+      }
+
+      res.status(200).json(cached.value);
+      return;
+    }
+
+    try {
+      await refreshSupply(now);
+      res.status(200).json(supplyCache?.value);
+    } catch (error) {
+      res.status(502).json({
+        error: 'Failed to query fluxd_rust',
+        message: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  });
+
+
+  let richListCache = new Map<string, { at: number; value: unknown }>();
+  let richListRefresh = new Map<string, Promise<void>>();
+
+  async function refreshRichList(key: string, now: number, page: number, pageSize: number, minBalance: number): Promise<void> {
+    const response = await getRichList(env, page, pageSize, minBalance);
+    richListCache.set(key, { at: now, value: response });
+  }
+
+  app.get('/api/v1/richlist', async (req: Request, res: Response) => {
+    const now = Date.now();
+    const page = toInt(req.query.page) ?? 1;
+    const pageSize = toInt(req.query.pageSize) ?? 100;
+    const minBalance = toInt(req.query.minBalance) ?? 1;
+
+
+    const key = `${page}:${pageSize}:${minBalance}`;
+    const cached = richListCache.get(key);
+
+    if (cached && now - cached.at < 10 * 60_000) {
+      if (now - cached.at >= 60_000 && !richListRefresh.get(key)) {
+        const refresh = refreshRichList(key, now, page, pageSize, minBalance).finally(() => {
+          richListRefresh.delete(key);
+        });
+        richListRefresh.set(key, refresh);
+      }
+
+      res.status(200).json(cached.value);
+      return;
+    }
+
+    try {
+      await refreshRichList(key, now, page, pageSize, minBalance);
+      res.status(200).json(richListCache.get(key)?.value);
+    } catch (error) {
+      res.status(502).json({
+        error: 'Failed to query fluxd_rust',
+        message: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  });
+
+
+}
+
