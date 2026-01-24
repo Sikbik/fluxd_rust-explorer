@@ -8,8 +8,8 @@
 
 ## Scale-up first
 
-- Recommended: 8 vCPU / 16 GB RAM / 500 GB SSD
-- Heavy: 16 vCPU / 32 GB RAM / 1 TB SSD
+- Recommended: 8 vCPU / 16 GB RAM / 200 GB SSD (enough for chainstate + indexes + some headroom)
+- Heavy: 16 vCPU / 32 GB RAM / 500 GB SSD (room for snapshots/backups, logs, and growth)
 
 ## Cache strategy
 
