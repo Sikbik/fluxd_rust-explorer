@@ -5,6 +5,10 @@ services:
       dockerfile: Dockerfile
     container_name: fluxd
     restart: unless-stopped
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
     ports:
       - "16125:16125"
       - "127.0.0.1:16124:16124"
