@@ -12,7 +12,7 @@ services:
     ports:
       - "16125:16125"
       - "127.0.0.1:16124:16124"
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     volumes:
       - fluxd-data:/data
     environment:
@@ -34,7 +34,7 @@ services:
       - "--rpc-pass"
       - "${FLUXD_RPC_PASS:-flux}"
       - "--rpc-allow-ip"
-      - "0.0.0.0/0"
+      - "172.18.0.0/16"
       - "--dashboard-addr"
       - "0.0.0.0:8080"
 
