@@ -1,6 +1,7 @@
 import express, { type Express } from 'express';
 import { randomUUID } from 'node:crypto';
 import { readEnv } from './env.js';
+import { getDaemonStatus } from './fluxd-rpc.js';
 import { noteSelfCheckResult, registerRoutes } from './routes.js';
 
 const app: Express = express();
@@ -153,15 +154,36 @@ app.listen(env.port, '0.0.0.0', () => {
   // eslint-disable-next-line no-console
   console.log(`explorer-api listening on 0.0.0.0:${env.port}`);
 
-  fetch(`http://127.0.0.1:${env.port}/api/v1/supply`).catch(() => undefined);
-  fetch(`http://127.0.0.1:${env.port}/api/v1/blocks/latest?limit=6`).catch(() => undefined);
-  fetch(`http://127.0.0.1:${env.port}/api/v1/stats/dashboard`).catch(() => undefined);
+  let warmupInterval: NodeJS.Timeout | null = null;
 
-  setInterval(() => {
+  async function runWarmups(): Promise<void> {
     fetch(`http://127.0.0.1:${env.port}/api/v1/supply`).catch(() => undefined);
     fetch(`http://127.0.0.1:${env.port}/api/v1/blocks/latest?limit=6`).catch(() => undefined);
     fetch(`http://127.0.0.1:${env.port}/api/v1/stats/dashboard`).catch(() => undefined);
-  }, 60_000);
+  }
+
+  async function startWarmupsWhenReady(): Promise<void> {
+    const deadlineMs = Date.now() + 90_000;
+
+    while (Date.now() < deadlineMs) {
+      try {
+        await getDaemonStatus(env);
+        await runWarmups();
+
+        if (!warmupInterval) {
+          warmupInterval = setInterval(() => {
+            void runWarmups();
+          }, 60_000);
+        }
+
+        return;
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 2_000));
+      }
+    }
+  }
+
+  void startWarmupsWhenReady();
 
   let lastSelfCheckAt: number | null = null;
   let lastSelfCheckOk: boolean | null = null;
