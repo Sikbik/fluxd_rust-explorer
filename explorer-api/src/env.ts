@@ -3,6 +3,7 @@ export type RpcAuthMode = 'cookie' | 'basic' | 'none';
 export interface Env {
   port: number;
   fluxdRpcUrl: string;
+  fluxdRpcSecondaryUrl?: string;
   rpcAuthMode: RpcAuthMode;
   rpcUser?: string;
   rpcPass?: string;
@@ -36,24 +37,34 @@ export function readEnv(): Env {
   const rpcUser = process.env.FLUXD_RPC_USER;
   const rpcPass = process.env.FLUXD_RPC_PASS;
 
+  const fluxdRpcSecondaryUrl = process.env.FLUXD_RPC_SECONDARY_URL;
+
   if (!Number.isFinite(port) || port <= 0) {
     throw new Error(`Invalid PORT: ${process.env.PORT}`);
   }
 
-  if (!fluxdRpcUrl.startsWith('http://') && !fluxdRpcUrl.startsWith('https://')) {
-    throw new Error(`FLUXD_RPC_URL must be http(s): ${fluxdRpcUrl}`);
-  }
-
-  const url = new URL(fluxdRpcUrl);
-  if (url.username || url.password) {
-    throw new Error('FLUXD_RPC_URL must not include credentials');
-  }
-
-  if (isPrivateAddress(url.hostname)) {
-    const allowedPrivateHosts = new Set(['fluxd', 'localhost', '127.0.0.1']);
-    if (!allowedPrivateHosts.has(url.hostname.toLowerCase())) {
-      throw new Error(`FLUXD_RPC_URL hostname not allowed: ${url.hostname}`);
+  const validateUpstreamUrl = (label: string, raw: string): void => {
+    if (!raw.startsWith('http://') && !raw.startsWith('https://')) {
+      throw new Error(`${label} must be http(s): ${raw}`);
     }
+
+    const url = new URL(raw);
+    if (url.username || url.password) {
+      throw new Error(`${label} must not include credentials`);
+    }
+
+    if (isPrivateAddress(url.hostname)) {
+      const allowedPrivateHosts = new Set(['fluxd', 'localhost', '127.0.0.1']);
+      if (!allowedPrivateHosts.has(url.hostname.toLowerCase())) {
+        throw new Error(`${label} hostname not allowed: ${url.hostname}`);
+      }
+    }
+  };
+
+  validateUpstreamUrl('FLUXD_RPC_URL', fluxdRpcUrl);
+
+  if (fluxdRpcSecondaryUrl) {
+    validateUpstreamUrl('FLUXD_RPC_SECONDARY_URL', fluxdRpcSecondaryUrl);
   }
 
   if (!['cookie', 'basic', 'none'].includes(rpcAuthMode)) {
@@ -66,5 +77,5 @@ export function readEnv(): Env {
     }
   }
 
-  return { port, fluxdRpcUrl, rpcAuthMode, rpcUser, rpcPass };
+  return { port, fluxdRpcUrl, fluxdRpcSecondaryUrl, rpcAuthMode, rpcUser, rpcPass };
 }
