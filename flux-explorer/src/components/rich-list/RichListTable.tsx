@@ -636,7 +636,7 @@ interface DistributionProps {
     color: string;
   }>;
   excludeSwapPools: boolean;
-  setExcludeSwapPools: (value: boolean) => void;
+  setExcludeSwapPools: React.Dispatch<React.SetStateAction<boolean>>;
 }
 
 function RichListDistribution({
@@ -654,6 +654,10 @@ function RichListDistribution({
 }: DistributionProps) {
   const formattedDate = new Date(lastUpdate);
 
+  const handleIncludeSwapPoolsChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    setExcludeSwapPools(!event.target.checked);
+  };
+
   return (
     <div className="grid gap-6 lg:grid-cols-3">
       <div className="border rounded-lg p-6 bg-card space-y-4 lg:col-span-2">
@@ -667,7 +671,7 @@ function RichListDistribution({
               <input
                 type="checkbox"
                 checked={!excludeSwapPools}
-                onChange={() => setExcludeSwapPools((prev) => !prev)}
+                onChange={handleIncludeSwapPoolsChange}
                 className="rounded border-gray-300 text-primary focus:ring-primary"
               />
               <span>Include Parallel Asset Swap Pools</span>
