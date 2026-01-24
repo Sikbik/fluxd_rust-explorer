@@ -1,7 +1,5 @@
 # Scaling & Staging (VPS / Flux)
 
-This is a pragmatic ops note for scaling the public explorer stack.
-
 ## Primary bottlenecks
 
 - `fluxd_rust` sync + indexing throughput (CPU + SSD IOPS)
@@ -10,26 +8,35 @@ This is a pragmatic ops note for scaling the public explorer stack.
 
 ## Scale-up first
 
-For public traffic, prefer scaling up a single node before adding complexity.
-
 - Recommended: 8 vCPU / 16 GB RAM / 500 GB SSD
 - Heavy: 16 vCPU / 32 GB RAM / 1 TB SSD
 
-## Cache and rate limiting
+## Cache strategy
 
-- `explorer-api` already sets `Cache-Control` for hot endpoints and rate-limits `/api/v1/*`.
-- For higher traffic, put a CDN/WAF in front of the public domain and cache:
-  - `/api/v1/status`, `/api/v1/sync` (short TTL)
-  - `/api/v1/supply`, `/api/v1/richlist` (long TTL + stale-while-revalidate)
+- Put a CDN/WAF in front of the public domain and cache aggressively.
+- Cache candidates:
+  - `/api/v1/status` (short TTL)
+  - `/api/v1/sync` (short TTL)
+  - `/api/v1/blocks/latest` (short TTL)
+  - `/api/v1/supply` (long TTL + stale-while-revalidate)
+  - `/api/v1/richlist` (long TTL + stale-while-revalidate)
+
+## Rate limiting
+
+- Keep rate limits at the edge when possible.
+- If rate limiting is done in `explorer-api`, keep it per-IP and per-endpoint.
+
+## Availability
+
+- If you need a hot standby, run a second stack with independent volumes.
+- `flux-explorer` can be scaled horizontally behind a load balancer.
+- `explorer-api` can be scaled horizontally if it stays stateless.
 
 ## Staging
 
-Create a staging deploy with the same stack but a separate app name / domain.
-
 Checklist:
-- Staging uses its own volumes (never share `/data` between prod and staging).
-- Run `./scripts/vps_deploy_smoke_checklist.sh --public-url <staging-url>`
-- Run Playwright smoke suite against staging before promoting.
+- Separate volumes (never share `/data` between prod and staging).
+- Validate: `./fluxd_rust/scripts/vps_deploy_smoke_checklist.sh --public-url <staging-url>`
 
 ## Promotion
 
@@ -37,4 +44,4 @@ Checklist:
 - Validate staging smoke + health
 - Deploy production
 - Validate production smoke + health
-- Compare `GET /api/v1/status` between staging/prod for lag and uptime sanity
+- Compare `GET /api/v1/status` between staging/prod
