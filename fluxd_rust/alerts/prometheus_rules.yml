@@ -1,0 +1,88 @@
+groups:
+  - name: fluxd-node
+    rules:
+      - alert: FluxdDown
+        expr: absent(up{job="fluxd"} == 1)
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "fluxd exporter down"
+
+      - alert: FluxdHeadersLaggingBlocks
+        expr: fluxd_header_gap{job="fluxd"} > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "fluxd headers ahead of blocks"
+
+      - alert: FluxdStalledAtHeight
+        expr: changes(fluxd_best_block_height{job="fluxd"}[15m]) == 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "fluxd best block height not increasing"
+
+      - alert: FluxdMempoolNearLimit
+        expr: (fluxd_mempool_bytes{job="fluxd"} / clamp_min(fluxd_mempool_max_bytes{job="fluxd"}, 1)) > 0.95
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "fluxd mempool near configured limit"
+
+      - alert: FluxdDbJournalNearMax
+        expr: (fluxd_db_journal_disk_space_bytes{job="fluxd"} / clamp_min(fluxd_db_max_journal_bytes{job="fluxd"}, 1)) > 0.95
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "fluxd Fjall journal near max"
+
+  - name: explorer-api
+    rules:
+      - alert: ExplorerApiDown
+        expr: absent(up{job="explorer-api"} == 1)
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "explorer-api exporter down"
+
+      - alert: ExplorerApiSelfCheckFailing
+        expr: explorer_api_self_check_last_ok{job="explorer-api"} == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "explorer-api self-check failing"
+
+  - name: node
+    rules:
+      - alert: NodeFilesystemAlmostOutOfSpace
+        expr: |
+          (
+            node_filesystem_avail_bytes{job="node",fstype!~"tmpfs|overlay"}
+            /
+            node_filesystem_size_bytes{job="node",fstype!~"tmpfs|overlay"}
+          ) < 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "node filesystem <5% space free"
+
+      - alert: NodeFilesystemCriticallyOutOfSpace
+        expr: |
+          (
+            node_filesystem_avail_bytes{job="node",fstype!~"tmpfs|overlay"}
+            /
+            node_filesystem_size_bytes{job="node",fstype!~"tmpfs|overlay"}
+          ) < 0.03
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "node filesystem <3% space free"
