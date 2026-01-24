@@ -1,36 +1,6 @@
 services:
-  fluxd:
-    build:
-      context: ./fluxd_rust
-      dockerfile: Dockerfile
-    container_name: fluxd
-    restart: unless-stopped
-    ports:
-      - "16125:16125"
-      - "127.0.0.1:16124:16124"
-      - "8080:8080"
-    volumes:
-      - fluxd-data:/data
-    command:
-      - "--network"
-      - "mainnet"
-      - "--backend"
-      - "fjall"
-      - "--data-dir"
-      - "/data"
-      - "--params-dir"
-      - "/data/params"
-      - "--fetch-params"
-      - "--rpc-addr"
-      - "0.0.0.0:16124"
-      - "--rpc-user"
-      - "${FLUXD_RPC_USER:-flux}"
-      - "--rpc-pass"
-      - "${FLUXD_RPC_PASS:-flux}"
-      - "--rpc-allow-ip"
-      - "0.0.0.0/0"
-      - "--dashboard-addr"
-      - "0.0.0.0:8080"
+  # fluxd is not needed for e2e tests when using FIXTURES_MODE=1
+  # The explorer-api returns deterministic fixture data without a real daemon
 
   explorer-api:
     build:
@@ -73,5 +43,4 @@ services:
       - PLAYWRIGHT_BASE_URL=http://flux-explorer:42069
       - CI=true
 
-volumes:
-  fluxd-data:
+
