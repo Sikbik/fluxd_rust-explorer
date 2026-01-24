@@ -1,43 +1,20 @@
-/**
- * Rich List API Route
- *
- * Fetches rich list data from the FluxIndexer API
- */
 
 import { NextRequest, NextResponse } from "next/server";
 import ky from "ky";
 import type { RichListData, RichListAddress } from "@/types/rich-list";
 import { satoshisToFlux } from "@/lib/api/fluxindexer-utils";
 
-// Get indexer URL from environment
-// Production (Flux/VPS): SERVER_API_URL set via docker-compose
-// Local dev: Falls back to 127.0.0.1:42067 (IPv4 explicit to avoid IPv6 issues)
 const INDEXER_API_URL =
   process.env.SERVER_API_URL ||
   process.env.INDEXER_API_URL ||
   "http://127.0.0.1:42067";
 
-const CACHE_DURATION = 3600; // 1 hour cache
+const CACHE_DURATION = 60;
 const PAGE_SIZE = 1000;
 const MAX_ADDRESSES = 1000;
 
 export const dynamic = 'force-dynamic';
 export const revalidate = CACHE_DURATION;
-
-/**
- * Request Coalescing for Concurrent Load Protection
- *
- * Problem: If 50 users hit /api/rich-list simultaneously, that's 50 database queries
- * scanning 1.5M addresses, which could overload the database.
- *
- * Solution: Share the same Promise across concurrent requests. Only the first request
- * triggers the database query; others wait for and share the same result.
- *
- * How it works with Next.js ISR:
- * - ISR (1 hour cache): Handles 99% of traffic with cached responses
- * - Request coalescing: Protects during the brief revalidation window
- * - Result: 50 concurrent requests = 1 database query
- */
 interface InflightRequest {
   promise: Promise<RichListData>;
   timestamp: number;

@@ -1,11 +1,5 @@
 "use client";
 
-/**
- * Rich List Table Component
- *
- * Displays the top Flux addresses alongside distribution charts.
- */
-
 import { useState, useEffect, useMemo } from "react";
 import Link from "next/link";
 import { Loader2, AlertCircle, TrendingUp, Lock, Server } from "lucide-react";
@@ -29,16 +23,7 @@ import {
   Legend,
 } from "recharts";
 import type { RichListAddress } from "@/types/rich-list";
-type RichListCategory = string;
-
-const richListLabelMap = new Map<string, { label?: string; category?: RichListCategory; note?: string; locked?: boolean }>();
-const richListCategoryColors: Record<string, string> = {
-  Unknown: "#6b7280",
-  "Swap Pool": "#0ea5e9",
-  "Cumulus Nodes": "#10b981",
-  "Nimbus Nodes": "#8b5cf6",
-  "Stratus Nodes": "#f59e0b",
-};
+import { richListLabelMap, richListCategoryColors } from "@/data/rich-list-labels";
 
 interface RichListResponse {
   lastUpdate: string;
@@ -394,9 +379,20 @@ export function RichListTable() {
                         </div>
                         {address.label && (
                           <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground mt-1">
-                            <Badge variant="outline" className="border-transparent" style={{ backgroundColor: `${richListCategoryColors[address.category ?? "Unknown"]}1A`, color: richListCategoryColors[address.category ?? "Unknown"] }}>
-                              {address.category ?? "Unknown"}
-                            </Badge>
+                            {(() => {
+                              const category = address.category ?? "Unknown";
+                              const color = richListCategoryColors[category] ?? richListCategoryColors.Unknown;
+
+                              return (
+                                <Badge
+                                  variant="outline"
+                                  className="border-transparent"
+                                  style={{ backgroundColor: `${color}1A`, color }}
+                                >
+                                  {category}
+                                </Badge>
+                              );
+                            })()}
                             <span className="font-medium text-foreground">{address.label}</span>
                             {address.locked && (
                               <span className="inline-flex items-center gap-1 text-xs text-amber-500">
@@ -506,7 +502,7 @@ function buildCategoryBreakdown(
   shieldedPool?: number,
   excludeSwapPools?: boolean
 ) {
-  const buckets = new Map<RichListCategory, number>();
+  const buckets = new Map<string, number>();
   let unknownBalance = 0;
 
   // FluxNode collateral constants
@@ -521,9 +517,7 @@ function buildCategoryBreakdown(
 
   addresses.forEach((addr) => {
     if (addr.category) {
-      // Exclude swap pool category if requested
       if (excludeSwapPools && addr.category === 'Swap Pool') {
-        // Skip swap pool addresses when excluding
         return;
       }
       buckets.set(
@@ -531,7 +525,6 @@ function buildCategoryBreakdown(
         (buckets.get(addr.category) || 0) + addr.balance
       );
     } else {
-      // For unknown/retail holders, calculate FluxNode collateral
       if (addr.cumulusCount) {
         cumulusCollateral += addr.cumulusCount * CUMULUS_COLLATERAL;
       }
@@ -555,13 +548,13 @@ function buildCategoryBreakdown(
 
   // Add FluxNode collateral as separate categories
   if (cumulusCollateral > 0) {
-    buckets.set("Cumulus Nodes" as RichListCategory, cumulusCollateral);
+    buckets.set("Cumulus Nodes", cumulusCollateral);
   }
   if (nimbusCollateral > 0) {
-    buckets.set("Nimbus Nodes" as RichListCategory, nimbusCollateral);
+    buckets.set("Nimbus Nodes", nimbusCollateral);
   }
   if (stratusCollateral > 0) {
-    buckets.set("Stratus Nodes" as RichListCategory, stratusCollateral);
+    buckets.set("Stratus Nodes", stratusCollateral);
   }
 
   // Calculate the denominator for percentages
@@ -569,9 +562,7 @@ function buildCategoryBreakdown(
   // When including swap pools: use total supply (absolute percentages)
   let denominator: number;
   if (excludeSwapPools) {
-    // Sum of all non-swap-pool category balances
     denominator = Array.from(buckets.values()).reduce((sum, val) => sum + val, 0);
-    // Add shielded pool to denominator if available
     if (shieldedPool && shieldedPool > 0) {
       denominator += shieldedPool;
     }
@@ -589,7 +580,7 @@ function buildCategoryBreakdown(
       name: category,
       value,
       percentage: denominator > 0 ? (value / denominator) * 100 : 0,
-      color: richListCategoryColors[category],
+      color: richListCategoryColors[category] ?? richListCategoryColors.Unknown,
     }))
     .sort((a, b) => b.value - a.value);
 
