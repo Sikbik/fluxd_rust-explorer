@@ -49,15 +49,39 @@ jobs:
         with:
           node-version: 20
           cache: npm
-          cache-dependency-path: flux-explorer/package-lock.json
-      - name: Install
+          cache-dependency-path: |
+            flux-explorer/package-lock.json
+            explorer-api/package-lock.json
+
+      - name: Install explorer-api
+        working-directory: explorer-api
+        run: npm ci
+      - name: Build explorer-api
+        working-directory: explorer-api
+        run: npm run build
+
+      - name: Install flux-explorer
         working-directory: flux-explorer
         run: npm ci
-      - name: Install Playwright
+      - name: Build flux-explorer
         working-directory: flux-explorer
-        run: npx playwright install --with-deps chromium
+        run: npm run build
+
+      - name: Start fixture explorer-api
+        working-directory: explorer-api
+        env:
+          FIXTURES_MODE: '1'
+          PORT: '42067'
+        run: node dist/index.js &
+
       - name: Smoke e2e
         working-directory: flux-explorer
         env:
           CI: true
-        run: npm run test:e2e:smoke
+          PLAYWRIGHT_BASE_URL: http://127.0.0.1:42069
+          SERVER_API_URL: http://127.0.0.1:42067
+          NEXT_PUBLIC_API_URL: AUTO
+        run: |
+          npx playwright install --with-deps chromium
+          npm run start -- -p 42069 &
+          npm run test:e2e:smoke

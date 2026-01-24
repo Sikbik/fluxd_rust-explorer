@@ -1,5 +1,4 @@
-import express from 'express';
-import type { Express } from 'express';
+import express, { type Express } from 'express';
 import { randomUUID } from 'node:crypto';
 import { readEnv } from './env.js';
 import { registerRoutes } from './routes.js';

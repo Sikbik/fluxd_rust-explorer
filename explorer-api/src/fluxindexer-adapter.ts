@@ -116,6 +116,9 @@ export async function fluxdGet<T>(
   params?: Record<string, string | number | boolean>,
   timeoutMs = 30_000
 ): Promise<T> {
+  if (env.fixturesMode) {
+    return fixturesGet(method, params) as T;
+  }
   const headers: Record<string, string> = {
     accept: 'application/json',
   };
@@ -159,6 +162,10 @@ async function fluxdGetWithOptions<T>(
   options?: Record<string, unknown>,
   timeoutMs = 30_000
 ): Promise<T> {
+  if (env.fixturesMode) {
+    return fixturesGet(method, params) as T;
+  }
+
   const headers: Record<string, string> = {
     accept: 'application/json',
   };
@@ -209,6 +216,239 @@ type BlockDeltaTx = {
   inputs: Array<{ address?: string; satoshis?: number }>;
   outputs: Array<{ address?: string; satoshis?: number }>;
 };
+
+type FixtureResponse = unknown;
+
+type FixtureBlock = {
+  hash: string;
+  height: number;
+  time: number;
+  bits: string;
+  difficulty: number;
+  chainwork: string;
+  deltas: BlockDeltaTx[];
+};
+
+type FixtureTx = {
+  txid: string;
+  version?: number;
+  locktime?: number;
+  vin?: unknown[];
+  vout?: unknown[];
+  blockhash?: string;
+  height?: number;
+  time?: number;
+};
+
+const FIXTURE_BLOCK_1: FixtureBlock = {
+  hash: '1'.repeat(64),
+  height: 1,
+  time: 1700000000,
+  bits: '1d00ffff',
+  difficulty: 1,
+  chainwork: '0x00',
+  deltas: [
+    {
+      txid: '2'.repeat(64),
+      index: 0,
+      inputs: [],
+      outputs: [{ address: 't1' + 'b'.repeat(33), satoshis: 50_0000_0000 }],
+    },
+  ],
+};
+
+function fixturesGet(method: string, params?: Record<string, string | number | boolean>): FixtureResponse {
+  if (method === 'getblockcount') {
+    return FIXTURE_BLOCK_1.height;
+  }
+
+  if (method === 'getblockhash') {
+    const rawParams = params?.params;
+    const decoded = typeof rawParams === 'string' ? JSON.parse(rawParams) : [];
+    const height = decoded?.[0];
+    if (height === 1 || height === '1') return FIXTURE_BLOCK_1.hash;
+    if (height === 0 || height === '0') return '0'.repeat(64);
+    throw new Error('Block height out of range');
+  }
+
+  if (method === 'getblockheader') {
+    const rawParams = params?.params;
+    const decoded = typeof rawParams === 'string' ? JSON.parse(rawParams) : [];
+    const hash = decoded?.[0];
+
+    if (hash === FIXTURE_BLOCK_1.hash) {
+      return {
+        hash: FIXTURE_BLOCK_1.hash,
+        confirmations: 1,
+        height: FIXTURE_BLOCK_1.height,
+        version: 4,
+        merkleroot: '0'.repeat(64),
+        finalsaplingroot: '0'.repeat(64),
+        time: FIXTURE_BLOCK_1.time,
+        bits: FIXTURE_BLOCK_1.bits,
+        difficulty: FIXTURE_BLOCK_1.difficulty,
+        chainwork: FIXTURE_BLOCK_1.chainwork,
+        type: 'POW',
+        nonce: '0',
+        solution: '',
+        previousblockhash: '0'.repeat(64),
+      };
+    }
+
+    if (hash === '0'.repeat(64)) {
+      return {
+        hash: '0'.repeat(64),
+        confirmations: 2,
+        height: 0,
+        version: 4,
+        merkleroot: '0'.repeat(64),
+        finalsaplingroot: '0'.repeat(64),
+        time: FIXTURE_BLOCK_1.time - 60,
+        bits: FIXTURE_BLOCK_1.bits,
+        difficulty: FIXTURE_BLOCK_1.difficulty,
+        chainwork: FIXTURE_BLOCK_1.chainwork,
+        type: 'POW',
+        nonce: '0',
+        solution: '',
+        previousblockhash: undefined,
+        nextblockhash: FIXTURE_BLOCK_1.hash,
+      };
+    }
+
+    throw new Error('Block not found');
+  }
+
+  if (method === 'getblockchaininfo') {
+    return {
+      chain: 'main',
+      blocks: FIXTURE_BLOCK_1.height,
+      headers: FIXTURE_BLOCK_1.height,
+      bestblockhash: FIXTURE_BLOCK_1.hash,
+      difficulty: FIXTURE_BLOCK_1.difficulty,
+      chainwork: FIXTURE_BLOCK_1.chainwork,
+      total_supply_zat: '0',
+      valuePools: [
+        { id: 'sprout', chainValueZat: '0' },
+        { id: 'sapling', chainValueZat: '0' },
+      ],
+    };
+  }
+
+  if (method === 'getblockhashes') {
+    return [FIXTURE_BLOCK_1.hash];
+  }
+
+  if (method === 'getaddressdeltas') {
+    return [];
+  }
+
+  if (method === 'getaddressmempool') {
+    return [];
+  }
+
+  if (method === 'getrichlist') {
+    const lastUpdate = String(Math.floor(Date.now() / 1000));
+    return {
+      lastUpdate,
+      generatedAt: lastUpdate,
+      lastBlockHeight: FIXTURE_BLOCK_1.height,
+      totalSupply: '0',
+      totalAddresses: 1,
+      page: 1,
+      pageSize: 100,
+      totalPages: 1,
+      addresses: [
+        {
+          rank: 1,
+          address: 't1' + 'c'.repeat(33),
+          balance: '0',
+          txCount: 0,
+          cumulusCount: 0,
+          nimbusCount: 0,
+          stratusCount: 0,
+        },
+      ],
+    };
+  }
+
+  if (method === 'estimatefee') {
+    return 0.0001;
+  }
+
+  if (method === 'getblockdeltas') {
+    const rawParams = params?.params;
+    const decoded = typeof rawParams === 'string' ? JSON.parse(rawParams) : [];
+    const id = decoded?.[0];
+
+    if (id === 1 || id === '1' || id === FIXTURE_BLOCK_1.hash) {
+      return {
+        ...FIXTURE_BLOCK_1,
+        confirmations: 1,
+        size: 0,
+        version: 4,
+        merkleroot: '0'.repeat(64),
+        nonce: '0',
+        previousblockhash: '0'.repeat(64),
+      };
+    }
+
+    throw new Error('Block not found');
+  }
+
+  if (method === 'getrawtransaction') {
+    const rawParams = params?.params;
+    const decoded = typeof rawParams === 'string' ? JSON.parse(rawParams) : [];
+    const txid = decoded?.[0];
+    if (typeof txid === 'string' && txid === FIXTURE_BLOCK_1.deltas[0].txid) {
+      const tx: FixtureTx = {
+        txid,
+        version: 1,
+        locktime: 0,
+        vin: [],
+        vout: [],
+        blockhash: FIXTURE_BLOCK_1.hash,
+        height: FIXTURE_BLOCK_1.height,
+        time: FIXTURE_BLOCK_1.time,
+      };
+      return {
+        ...tx,
+        confirmations: 1,
+        blocktime: FIXTURE_BLOCK_1.time,
+        size: 0,
+        vsize: 0,
+        hex: '00',
+      };
+    }
+    throw new Error('No such mempool or blockchain transaction');
+  }
+
+  if (method === 'getaddressbalance') {
+    return { balance: '0', received: '0' };
+  }
+
+  if (method === 'getaddressutxos') {
+    return [];
+  }
+
+  if (method === 'getaddresstxids') {
+    return [];
+  }
+
+  if (method === 'getinfo') {
+    return {
+      version: 1,
+      protocolversion: 170013,
+      blocks: FIXTURE_BLOCK_1.height,
+      headers: FIXTURE_BLOCK_1.height,
+    };
+  }
+
+  if (method === 'getnetworkinfo') {
+    return { connections: 8 };
+  }
+
+  throw new Error(`No fixture for method ${method}`);
+}
 
 type BlockDeltasResponse = {
   hash: string;

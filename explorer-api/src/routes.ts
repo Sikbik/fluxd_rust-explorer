@@ -1,5 +1,4 @@
-import express from 'express';
-import type { Express, Request, Response } from 'express';
+import express, { type Express, type Request, type Response } from 'express';
 import type { Env } from './env.js';
 import { getDaemonStatus } from './fluxd-rpc.js';
 import {

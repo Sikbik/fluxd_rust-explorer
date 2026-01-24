@@ -22,6 +22,7 @@ test('contract: registers core api/v1 routes', async () => {
     port: 0,
     fluxdRpcUrl: 'http://fluxd:16124',
     rpcAuthMode: 'none',
+    fixturesMode: true,
   });
 
   const expected = [

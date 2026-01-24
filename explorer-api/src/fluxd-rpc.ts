@@ -147,6 +147,27 @@ function requireNumber(value: unknown, name: string): number {
 }
 
 export async function getDaemonStatus(env: Env): Promise<FluxdStatus> {
+  if (env.fixturesMode) {
+    return {
+      name: 'fluxd_rust',
+      version: 'fixtures',
+      network: 'main',
+      consensus: 'fixtures',
+      daemon: {
+        version: 'fixtures',
+        protocolVersion: 170013,
+        blocks: 1,
+        headers: 1,
+        bestBlockHash: '0'.repeat(64),
+        difficulty: 1,
+        chainwork: '0x00',
+        consensus: 'fixtures',
+        connections: 8,
+      },
+      timestamp: new Date().toISOString(),
+    };
+  }
+
   const [infoRaw, chainInfoRaw, netInfoRaw] = await Promise.all([
     fluxdDaemonGet<unknown>(env, 'getinfo'),
     fluxdDaemonGet<unknown>(env, 'getblockchaininfo'),

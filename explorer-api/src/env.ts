@@ -7,6 +7,7 @@ export interface Env {
   rpcAuthMode: RpcAuthMode;
   rpcUser?: string;
   rpcPass?: string;
+  fixturesMode: boolean;
 }
 
 function isPrivateAddress(hostname: string): boolean {
@@ -30,9 +31,10 @@ function isPrivateAddress(hostname: string): boolean {
 }
 
 export function readEnv(): Env {
+  const fixturesMode = process.env.FIXTURES_MODE === '1' || process.env.FIXTURES_MODE === 'true';
   const port = parseInt(process.env.PORT ?? '42067', 10);
   const fluxdRpcUrl = process.env.FLUXD_RPC_URL ?? 'http://fluxd:16124';
-  const rpcAuthMode = (process.env.FLUXD_RPC_AUTH_MODE ?? 'none') as RpcAuthMode;
+  const rpcAuthMode = (process.env.FLUXD_RPC_AUTH_MODE ?? (fixturesMode ? 'none' : 'none')) as RpcAuthMode;
 
   const rpcUser = process.env.FLUXD_RPC_USER;
   const rpcPass = process.env.FLUXD_RPC_PASS;
@@ -61,21 +63,31 @@ export function readEnv(): Env {
     }
   };
 
-  validateUpstreamUrl('FLUXD_RPC_URL', fluxdRpcUrl);
+  if (!fixturesMode) {
+    validateUpstreamUrl('FLUXD_RPC_URL', fluxdRpcUrl);
 
-  if (fluxdRpcSecondaryUrl) {
-    validateUpstreamUrl('FLUXD_RPC_SECONDARY_URL', fluxdRpcSecondaryUrl);
+    if (fluxdRpcSecondaryUrl) {
+      validateUpstreamUrl('FLUXD_RPC_SECONDARY_URL', fluxdRpcSecondaryUrl);
+    }
   }
 
   if (!['cookie', 'basic', 'none'].includes(rpcAuthMode)) {
     throw new Error(`Invalid FLUXD_RPC_AUTH_MODE: ${rpcAuthMode}`);
   }
 
-  if (rpcAuthMode === 'basic') {
+  if (!fixturesMode && rpcAuthMode === 'basic') {
     if (!rpcUser || !rpcPass) {
       throw new Error('FLUXD_RPC_AUTH_MODE=basic requires FLUXD_RPC_USER and FLUXD_RPC_PASS');
     }
   }
 
-  return { port, fluxdRpcUrl, fluxdRpcSecondaryUrl, rpcAuthMode, rpcUser, rpcPass };
+  return {
+    port,
+    fluxdRpcUrl,
+    fluxdRpcSecondaryUrl,
+    rpcAuthMode,
+    rpcUser,
+    rpcPass,
+    fixturesMode,
+  };
 }
