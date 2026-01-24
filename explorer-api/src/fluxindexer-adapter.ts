@@ -16,7 +16,8 @@ function confirmationsFromHeight(bestHeight: number, height: number | null): num
   const h = Math.trunc(height);
   const tip = Math.trunc(bestHeight);
 
-  if (h < 0 || tip < h) return 0;
+  if (h < 0) return -1;
+  if (tip < h) return 0;
   return tip - h + 1;
 }
 

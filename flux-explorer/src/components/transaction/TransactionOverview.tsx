@@ -51,7 +51,13 @@ export function TransactionOverview({ transaction }: TransactionOverviewProps) {
             icon={<CheckCircle2 className="h-5 w-5" />}
             label="Confirmations"
             value={transaction.confirmations.toLocaleString()}
-            description={transaction.confirmations === 0 ? "Unconfirmed" : "Confirmed"}
+            description={
+              transaction.confirmations < 0
+                ? "Orphaned"
+                : transaction.confirmations === 0
+                  ? "Unconfirmed"
+                  : "Confirmed"
+            }
           />
 
           {/* Timestamp */}
