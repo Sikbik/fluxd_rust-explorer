@@ -134,7 +134,11 @@ export async function fluxdGet<T>(
     : '';
 
   const url = `${env.fluxdRpcUrl}/daemon/${method}${search}`;
-  const response = await fetch(url, { headers, signal: AbortSignal.timeout(timeoutMs) });
+  const response = await fetch(url, {
+    headers,
+    signal: AbortSignal.timeout(timeoutMs),
+    keepalive: false,
+  });
   if (!response.ok) {
     const text = await response.text().catch(() => '');
     throw new Error(`fluxd_rust /daemon/${method} failed: ${response.status} ${response.statusText}${text ? `: ${text}` : ''}`);
@@ -189,7 +193,11 @@ async function fluxdGetWithOptions<T>(
   const search = Object.keys(query).length > 0 ? `?${new URLSearchParams(query).toString()}` : '';
 
   const url = `${env.fluxdRpcUrl}/daemon/${method}${search}`;
-  const response = await fetch(url, { headers, signal: AbortSignal.timeout(timeoutMs) });
+  const response = await fetch(url, {
+    headers,
+    signal: AbortSignal.timeout(timeoutMs),
+    keepalive: false,
+  });
   if (!response.ok) {
     const text = await response.text().catch(() => '');
     throw new Error(`fluxd_rust /daemon/${method} failed: ${response.status} ${response.statusText}${text ? `: ${text}` : ''}`);
