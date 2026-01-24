@@ -23,7 +23,7 @@ test('search route resolves numeric height to block page', async ({ page }) => {
 test('block detail renders transactions or error state', async ({ page }) => {
   await page.goto('/block/1');
 
-  const transactionsHeading = page.getByRole('heading', { name: 'Transactions' });
+  const transactionsHeading = page.getByRole('heading', { name: 'Transactions' }).first();
   const errorLabel = page.getByText('Error Loading Block');
 
   await expect(transactionsHeading.or(errorLabel)).toBeVisible();
@@ -33,13 +33,13 @@ test('transaction detail renders core fields or error state', async ({ page }) =
   const fakeTxid = '0'.repeat(64);
   await page.goto(`/tx/${fakeTxid}`);
 
-  const txHeading = page.getByRole('heading', { name: 'Transaction' });
+  const txHeading = page.getByRole('heading', { name: /^Transaction$/ });
   const errorLabel = page.getByText('Error Loading Transaction');
 
   await expect(txHeading.or(errorLabel)).toBeVisible();
 
   if (await txHeading.isVisible()) {
-    await expect(page.getByText('Transaction ID')).toBeVisible();
+    await expect(page.getByText('Transaction ID').first()).toBeVisible();
   }
 });
 
@@ -53,7 +53,7 @@ test('address page renders core fields or error state', async ({ page }) => {
   await expect(addressHeading.or(errorLabel)).toBeVisible();
 
   if (await addressHeading.isVisible()) {
-    await expect(page.getByText('Address')).toBeVisible();
+    await expect(page.getByText('Address').first()).toBeVisible();
   }
 });
 
