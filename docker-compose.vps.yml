@@ -11,6 +11,8 @@ services:
       - "8080:8080"
     volumes:
       - fluxd-data:/data
+    environment:
+      - RUST_LOG=${RUST_LOG:-info}
     command:
       - "--network"
       - "mainnet"
@@ -33,17 +35,53 @@ services:
       - "0.0.0.0:8080"
 
   explorer-api:
+    build:
+      context: ./explorer-api
+      dockerfile: Dockerfile
+    container_name: explorer-api
+    restart: unless-stopped
     depends_on:
       - fluxd
+    ports:
+      - "42067:42067"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:42067/ready').then(r=>process.exit(r.status===200?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
     environment:
+      - PORT=42067
       - FLUXD_RPC_URL=http://fluxd:16124
       - FLUXD_RPC_AUTH_MODE=basic
       - FLUXD_RPC_USER=${FLUXD_RPC_USER:-flux}
       - FLUXD_RPC_PASS=${FLUXD_RPC_PASS:-flux}
 
   flux-explorer:
+    build:
+      context: ./flux-explorer
+      dockerfile: Dockerfile
+    container_name: flux-explorer
+    restart: unless-stopped
+    depends_on:
+      - explorer-api
+    ports:
+      - "42069:42069"
     volumes:
       - explorer-data:/app/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:42069', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
+      interval: 30s
+      timeout: 5s
+      start_period: 40s
+      retries: 3
+    environment:
+      - NODE_ENV=production
+      - NEXT_TELEMETRY_DISABLED=1
+      - HOSTNAME=0.0.0.0
+      - PORT=42069
+      - SERVER_API_URL=http://explorer-api:42067
+      - NEXT_PUBLIC_API_URL=http://explorer-api:42067
 
 volumes:
   fluxd-data:
