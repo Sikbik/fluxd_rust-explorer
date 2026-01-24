@@ -461,19 +461,98 @@ export function registerRoutes(app: Express, env: Env) {
       const fromTimestamp = toInt(req.query.fromTimestamp) ?? undefined;
       const toTimestamp = toInt(req.query.toTimestamp) ?? undefined;
 
-      const response = await getAddressTransactions(env, address, {
-        limit,
-        offset,
-        cursorHeight,
-        cursorTxIndex,
-        cursorTxid,
-        fromBlock,
-        toBlock,
-        fromTimestamp,
-        toTimestamp,
+      const fullMode = String(req.query.full ?? '').toLowerCase();
+      if (fullMode === '1' || fullMode === 'true' || fullMode === 'yes') {
+        const response = await getAddressTransactions(env, address, {
+          limit,
+          offset,
+          cursorHeight,
+          cursorTxIndex,
+          cursorTxid,
+          fromBlock,
+          toBlock,
+          fromTimestamp,
+          toTimestamp,
+        });
+
+        res.status(200).json(response);
+        return;
+      }
+
+      const txids = await fluxdGet<string[]>(env, 'getaddresstxids', {
+        params: JSON.stringify([{ addresses: [address] }]),
       });
 
-      res.status(200).json(response);
+      const ids = Array.isArray(txids) ? txids : [];
+
+      const startIndex = cursorTxid ? Math.max(0, ids.indexOf(cursorTxid) + 1) : (offset ?? 0);
+      const end = Math.max(0, ids.length - startIndex);
+      const begin = Math.max(0, end - limit);
+      const pageIds = ids.slice(begin, end).reverse();
+
+      const bestHeight = await fluxdGet<number>(env, 'getblockcount', { params: JSON.stringify([]) });
+
+      const transactions = await Promise.all(
+        pageIds.map(async (txid) => {
+          try {
+            const tx = await getTransaction(env, txid, false);
+            return {
+              txid,
+              blockHeight: tx.blockHeight ?? 0,
+              timestamp: tx.time ?? tx.blockTime ?? 0,
+              blockHash: tx.blockHash,
+              confirmations: tx.confirmations ?? (tx.blockHeight != null ? Math.max(0, bestHeight - tx.blockHeight + 1) : 0),
+              direction: 'received',
+              value: '0',
+              receivedValue: '0',
+              sentValue: '0',
+              fromAddresses: [],
+              fromAddressCount: 0,
+              toAddresses: [],
+              toAddressCount: 0,
+              selfTransfer: false,
+              feeValue: '0',
+              changeValue: '0',
+              toOthersValue: '0',
+              isCoinbase: false,
+            };
+          } catch {
+            return {
+              txid,
+              blockHeight: 0,
+              timestamp: 0,
+              confirmations: 0,
+              direction: 'received',
+              value: '0',
+              receivedValue: '0',
+              sentValue: '0',
+              fromAddresses: [],
+              fromAddressCount: 0,
+              toAddresses: [],
+              toAddressCount: 0,
+              selfTransfer: false,
+              feeValue: '0',
+              changeValue: '0',
+              toOthersValue: '0',
+              isCoinbase: false,
+            };
+          }
+        })
+      );
+
+      const nextCursor = begin > 0
+        ? { height: 0, txIndex: 0, txid: ids[begin - 1] }
+        : undefined;
+
+      res.status(200).json({
+        address,
+        transactions,
+        total: ids.length,
+        filteredTotal: ids.length,
+        limit,
+        offset,
+        nextCursor,
+      });
     } catch (error) {
       upstreamUnavailable(res, 'upstream_unavailable', error instanceof Error ? error.message : 'Unknown error');
     }

@@ -165,7 +165,7 @@ async function proxyRequest(
 
     const response = await fetch(targetUrl, {
       ...options,
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(30_000),
     });
 
     // Get response body
