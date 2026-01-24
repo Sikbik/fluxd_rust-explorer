@@ -29,6 +29,22 @@ ssh <vps-user>@<vps-host> "su - dev -c 'bash -lc \"cd <remote-repo-path> && /hom
 
 ## Smoke test (recommended)
 
+### Full-stack deploy smoke checklist (recommended)
+
+To validate the full VPS stack (daemon + adapter + UI) after a deploy, run:
+
+```bash
+./scripts/vps_deploy_smoke_checklist.sh \
+  --public-url https://<public-explorer-domain> \
+  --api-url https://<public-explorer-domain>
+```
+
+Notes:
+- `--api-url` is only needed if `explorer-api` is exposed separately from the UI domain.
+- The script is read-only: it does not restart services or modify state.
+- Daemon dashboard checks default to `http://127.0.0.1:8080` (override via `--daemon-dashboard`).
+
+
 After building, run a short-lived smoke test instance (separate data dir + RPC port):
 
 ```bash
