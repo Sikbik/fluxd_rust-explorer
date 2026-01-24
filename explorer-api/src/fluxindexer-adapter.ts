@@ -58,6 +58,37 @@ export interface FluxIndexerBlockResponse {
   reward?: string;
   txCount?: number;
   txs?: Array<{ txid: string }>;
+  txDetails?: Array<{
+    txid: string;
+    order: number;
+    kind: 'coinbase' | 'transfer' | 'fluxnode_start' | 'fluxnode_confirm' | 'fluxnode_other';
+    isCoinbase: boolean;
+    valueSat?: number;
+    value?: number;
+    valueInSat?: number;
+    valueIn?: number;
+    feeSat?: number;
+    fee?: number;
+    fromAddr?: string | null;
+    toAddr?: string | null;
+  }>;
+  txSummary?: {
+    total: number;
+    regular: number;
+    coinbase: number;
+    transfers: number;
+    fluxnodeStart: number;
+    fluxnodeConfirm: number;
+    fluxnodeOther: number;
+    fluxnodeTotal: number;
+    tierCounts: {
+      cumulus: number;
+      nimbus: number;
+      stratus: number;
+      starting: number;
+      unknown: number;
+    };
+  };
 }
 
 export interface FluxIndexerTransactionResponse {
@@ -172,25 +203,110 @@ async function fluxdGetWithOptions<T>(
   return json as T;
 }
 
+type BlockDeltaTx = {
+  txid: string;
+  index: number;
+  inputs: Array<{ address?: string; satoshis?: number }>;
+  outputs: Array<{ address?: string; satoshis?: number }>;
+};
+
+type BlockDeltasResponse = {
+  hash: string;
+  confirmations?: number;
+  size: number;
+  height: number;
+  version: number;
+  merkleroot: string;
+  deltas: BlockDeltaTx[];
+  time: number;
+  nonce?: string;
+  bits: string;
+  difficulty: number | string;
+  chainwork: string;
+  previousblockhash?: string;
+  nextblockhash?: string;
+};
+
+function amountToFluxNumber(satoshis: bigint): number {
+  const sign = satoshis < 0n ? -1 : 1;
+  const abs = satoshis < 0n ? -satoshis : satoshis;
+  const whole = abs / 100000000n;
+  const frac = abs % 100000000n;
+  const value = Number(whole) + Number(frac) / 1e8;
+  return sign < 0 ? -value : value;
+}
+
 export async function getBlockByHash(env: Env, hash: string): Promise<FluxIndexerBlockResponse> {
-  const block = await fluxdGet<any>(env, 'getblock', { params: JSON.stringify([hash, 1]) });
+  const deltasResp = await fluxdGet<BlockDeltasResponse>(env, 'getblockdeltas', { params: JSON.stringify([hash]) });
+
+  const txs = Array.isArray(deltasResp.deltas) ? deltasResp.deltas : [];
+
+  const txDetails: NonNullable<FluxIndexerBlockResponse['txDetails']> = txs.map((tx, order) => {
+    const inputs = Array.isArray(tx.inputs) ? tx.inputs : [];
+    const outputs = Array.isArray(tx.outputs) ? tx.outputs : [];
+
+    const isCoinbase = inputs.length === 0;
+
+    const vinSat = inputs.reduce((acc: bigint, row) => acc + toSatoshiBigInt(row?.satoshis ?? 0), 0n);
+    const voutSat = outputs.reduce((acc: bigint, row) => acc + toSatoshiBigInt(row?.satoshis ?? 0), 0n);
+
+    const feeSat = !isCoinbase && vinSat > voutSat ? (vinSat - voutSat) : 0n;
+
+    const fromAddr = inputs.find((i) => typeof i?.address === 'string' && i.address.length > 0)?.address ?? null;
+    const toAddr = outputs.find((o) => typeof o?.address === 'string' && o.address.length > 0)?.address ?? null;
+
+    return {
+      txid: toString(tx.txid),
+      order,
+      kind: (isCoinbase ? 'coinbase' : 'transfer') as 'coinbase' | 'transfer',
+      isCoinbase,
+      valueSat: Number(voutSat),
+      value: amountToFluxNumber(voutSat),
+      valueInSat: Number(vinSat),
+      valueIn: amountToFluxNumber(vinSat),
+      feeSat: Number(feeSat),
+      fee: amountToFluxNumber(feeSat),
+      fromAddr,
+      toAddr,
+    };
+  });
+
+  const coinbaseCount = txDetails.filter((d) => d.isCoinbase).length;
+  const transfers = Math.max(0, txDetails.length - coinbaseCount);
+
+  const txSummary = {
+    total: txDetails.length,
+    regular: transfers,
+    coinbase: coinbaseCount,
+    transfers,
+    fluxnodeStart: 0,
+    fluxnodeConfirm: 0,
+    fluxnodeOther: 0,
+    fluxnodeTotal: 0,
+    tierCounts: { cumulus: 0, nimbus: 0, stratus: 0, starting: 0, unknown: 0 },
+  };
+
+  const rewardSat = txDetails.find((d) => d.isCoinbase)?.valueSat ?? 0;
 
   return {
-    hash: toString(block.hash),
-    height: toNumber(block.height),
-    size: toNumber(block.size),
-    version: toNumber(block.version),
-    merkleRoot: toString(block.merkleroot),
-    time: toNumber(block.time),
-    nonce: toString(block.nonce),
-    bits: toString(block.bits),
-    difficulty: toString(block.difficulty),
-    chainWork: toString(block.chainwork),
-    confirmations: toNumber(block.confirmations),
-    previousBlockHash: toString(block.previousblockhash),
-    nextBlockHash: toString(block.nextblockhash),
-    txCount: Array.isArray(block.tx) ? block.tx.length : 0,
-    txs: Array.isArray(block.tx) ? block.tx.map((txid: unknown) => ({ txid: toString(txid) })) : [],
+    hash: toString(deltasResp.hash, hash),
+    height: toNumber(deltasResp.height, 0),
+    size: toNumber(deltasResp.size, 0),
+    version: toNumber(deltasResp.version, 0),
+    merkleRoot: toString(deltasResp.merkleroot),
+    time: toNumber(deltasResp.time, 0),
+    nonce: toString(deltasResp.nonce),
+    bits: toString(deltasResp.bits),
+    difficulty: toString(deltasResp.difficulty),
+    chainWork: toString(deltasResp.chainwork),
+    confirmations: toNumber(deltasResp.confirmations, 0),
+    previousBlockHash: toString(deltasResp.previousblockhash),
+    nextBlockHash: toString(deltasResp.nextblockhash),
+    reward: toSatoshiString(rewardSat),
+    txCount: txDetails.length,
+    txs: txDetails.map((d) => ({ txid: d.txid })),
+    txDetails,
+    txSummary,
   };
 }
 
