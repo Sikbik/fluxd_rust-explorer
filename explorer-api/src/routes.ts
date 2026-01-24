@@ -296,25 +296,57 @@ export function registerRoutes(app: Express, env: Env) {
     }
   });
 
+  const LATEST_BLOCKS_CACHE_FRESH_MS = 2_000;
+  const LATEST_BLOCKS_CACHE_STALE_MAX_MS = 5 * 60_000;
+
   let latestBlocksCache: { at: number; limit: number; value: unknown } | null = null;
+  let latestBlocksRefresh: Promise<{ at: number; limit: number; value: unknown }> | null = null;
 
-   app.get('/api/v1/blocks/latest', async (req: Request, res: Response) => {
-     const now = Date.now();
-     const limit = clampInt(toInt(req.query.limit) ?? 10, 1, 50);
+  async function fetchLatestBlocksPayload(limit: number): Promise<{ at: number; limit: number; value: unknown }> {
+    const at = Date.now();
+    const value = await getLatestBlocks(env, limit);
+    return { at, limit, value };
+  }
 
+  function kickLatestBlocksRefresh(limit: number): Promise<{ at: number; limit: number; value: unknown }> {
+    const inflight = latestBlocksRefresh;
+    if (inflight) return inflight;
+
+    latestBlocksRefresh = fetchLatestBlocksPayload(limit);
+
+    latestBlocksRefresh
+      .then((result) => {
+        latestBlocksCache = result;
+      })
+      .catch(() => {})
+      .finally(() => {
+        latestBlocksRefresh = null;
+      });
+
+    return latestBlocksRefresh;
+  }
+
+  app.get('/api/v1/blocks/latest', async (req: Request, res: Response) => {
+    res.setHeader('Cache-Control', 'public, max-age=0, s-maxage=2, stale-while-revalidate=60');
+
+    const now = Date.now();
+    const limit = clampInt(toInt(req.query.limit) ?? 10, 1, 50);
 
     const cached = latestBlocksCache;
-    if (cached && cached.limit === limit && now - cached.at < 15_000) {
+    if (cached && cached.limit === limit && now - cached.at < LATEST_BLOCKS_CACHE_STALE_MAX_MS) {
+      if (now - cached.at >= LATEST_BLOCKS_CACHE_FRESH_MS) {
+        void kickLatestBlocksRefresh(limit);
+      }
+
       res.status(200).json(cached.value);
       return;
     }
 
     try {
-      const response = await getLatestBlocks(env, limit);
-      latestBlocksCache = { at: now, limit, value: response };
-      res.status(200).json(response);
+      const result = await kickLatestBlocksRefresh(limit);
+      res.status(200).json(result.value);
     } catch (error) {
-      if (cached && cached.limit === limit && now - cached.at < 10 * 60_000) {
+      if (cached && cached.limit === limit) {
         res.status(200).json(cached.value);
         return;
       }
