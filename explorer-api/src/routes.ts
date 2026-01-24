@@ -581,10 +581,33 @@ export function registerRoutes(app: Express, env: Env) {
     }
   });
 
+  let dashboardStatsCache: { at: number; value: unknown } | null = null;
+  let dashboardStatsRefresh: Promise<void> | null = null;
+
+  async function refreshDashboardStats(now: number): Promise<void> {
+    const response = await getDashboardStats(env);
+    dashboardStatsCache = { at: now, value: response };
+  }
+
   app.get('/api/v1/stats/dashboard', async (_req: Request, res: Response) => {
+    res.setHeader('Cache-Control', 'public, max-age=0, s-maxage=2, stale-while-revalidate=60');
+    const now = Date.now();
+    const cached = dashboardStatsCache;
+
+    if (cached && now - cached.at < 10 * 60_000) {
+      if (now - cached.at >= 2_000 && !dashboardStatsRefresh) {
+        dashboardStatsRefresh = refreshDashboardStats(now).finally(() => {
+          dashboardStatsRefresh = null;
+        });
+      }
+
+      res.status(200).json(cached.value);
+      return;
+    }
+
     try {
-      const response = await getDashboardStats(env);
-      res.status(200).json(response);
+      await refreshDashboardStats(now);
+      res.status(200).json(dashboardStatsCache?.value);
     } catch (error) {
       upstreamUnavailable(res, 'upstream_unavailable', error instanceof Error ? error.message : 'Unknown error');
     }
