@@ -1151,36 +1151,41 @@ export async function getDashboardStats(env: Env): Promise<{
 
   let txCount24h = 0;
   try {
-    const hashes = await fluxdGet<string[]>(env, 'getblockhashes', { params: JSON.stringify([tipUnix, low, { noOrphans: true }]) });
+    const hashes = await fluxdGet<string[]>(env, 'getblockhashes', {
+      params: JSON.stringify([tipUnix, low, { noOrphans: true }]),
+    });
+
     const lastN = hashes.length > 250 ? hashes.slice(-250) : hashes;
+    if (lastN.length > 0) {
+      const firstHash = lastN[0];
+      const lastHash = lastN[lastN.length - 1];
 
-    const heights: number[] = [];
-    for (const hash of lastN) {
-      try {
-        const header = await fluxdGet<any>(env, 'getblockheader', { params: JSON.stringify([hash]) });
-        const h = toNumber(header.height, -1);
-        if (h >= 0) heights.push(h);
-      } catch {
-      }
-    }
+      const [firstHeader, lastHeader] = await Promise.all([
+        fluxdGet<any>(env, 'getblockheader', { params: JSON.stringify([firstHash]) }),
+        fluxdGet<any>(env, 'getblockheader', { params: JSON.stringify([lastHash]) }),
+      ]);
 
-    if (heights.length > 0) {
-      const minHeight = Math.max(0, Math.min(...heights) - 50);
-      const maxHeight = Math.max(...heights);
+      const firstHeight = toNumber(firstHeader?.height, -1);
+      const lastHeight = toNumber(lastHeader?.height, -1);
 
-      const countRange = await fluxdGet<any>(env, 'getaddressdeltas', {
-        params: JSON.stringify([{ addresses: [], start: minHeight, end: maxHeight }]),
-      });
+      if (firstHeight >= 0 && lastHeight >= 0) {
+        const minHeight = Math.max(0, Math.min(firstHeight, lastHeight) - 50);
+        const maxHeight = Math.max(firstHeight, lastHeight);
 
-      const countRows = Array.isArray(countRange) ? countRange : countRange?.deltas;
-      const unique = new Set<string>();
-      if (Array.isArray(countRows)) {
-        for (const row of countRows) {
-          const txid = typeof row?.txid === 'string' ? row.txid : null;
-          if (txid) unique.add(txid);
+        const countRange = await fluxdGet<any>(env, 'getaddressdeltas', {
+          params: JSON.stringify([{ addresses: [], start: minHeight, end: maxHeight }]),
+        });
+
+        const countRows = Array.isArray(countRange) ? countRange : countRange?.deltas;
+        const unique = new Set<string>();
+        if (Array.isArray(countRows)) {
+          for (const row of countRows) {
+            const txid = typeof row?.txid === 'string' ? row.txid : null;
+            if (txid) unique.add(txid);
+          }
         }
+        txCount24h = unique.size;
       }
-      txCount24h = unique.size;
     }
   } catch {
     txCount24h = 0;
@@ -1189,25 +1194,19 @@ export async function getDashboardStats(env: Env): Promise<{
   let avgBlockTimeSeconds = 30;
   try {
     const sampleCount = 120;
-    const heights = Array.from({ length: Math.min(sampleCount, tipHeight) }, (_, idx) => tipHeight - idx).filter((h) => h >= 0);
+    const startHeight = Math.max(0, tipHeight - (sampleCount - 1));
 
-    const times: number[] = [];
-    for (const h of heights) {
-      try {
-        const hash = await fluxdGet<string>(env, 'getblockhash', { params: JSON.stringify([h]) });
-        const header = await fluxdGet<any>(env, 'getblockheader', { params: JSON.stringify([hash]) });
-        const t = toNumber(header.time, 0);
-        if (t > 0) times.push(t);
-      } catch {
-      }
-    }
+    if (latestTimestamp > 0 && tipHeight > startHeight) {
+      const startHash = await fluxdGet<string>(env, 'getblockhash', { params: JSON.stringify([startHeight]) });
+      const startHeader = await fluxdGet<any>(env, 'getblockheader', { params: JSON.stringify([startHash]) });
+      const startTime = toNumber(startHeader?.time, 0);
 
-    if (times.length >= 2) {
-      times.sort((a, b) => a - b);
-      const span = times[times.length - 1] - times[0];
-      const denom = times.length - 1;
-      if (span > 0 && denom > 0) {
-        avgBlockTimeSeconds = span / denom;
+      if (startTime > 0) {
+        const span = latestTimestamp - startTime;
+        const denom = tipHeight - startHeight;
+        if (span > 0 && denom > 0) {
+          avgBlockTimeSeconds = span / denom;
+        }
       }
     }
   } catch {
