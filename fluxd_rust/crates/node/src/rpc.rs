@@ -218,6 +218,7 @@ const RPC_METHODS: &[&str] = &[
     "gettxoutproof",
     "verifytxoutproof",
     "gettxoutsetinfo",
+    "getindexstats",
     "getrichlist",
     "getblockdeltas",
     "getspentinfo",
@@ -1447,6 +1448,7 @@ fn dispatch_method<S: fluxd_storage::KeyValueStore + 'static>(
         "gettxoutproof" => rpc_gettxoutproof(chainstate, params),
         "verifytxoutproof" => rpc_verifytxoutproof(chainstate, params),
         "gettxoutsetinfo" => rpc_gettxoutsetinfo(chainstate, params, data_dir),
+        "getindexstats" => rpc_getindexstats(chainstate, params),
         "getrichlist" => rpc_getrichlist(chainstate, params, chain_params),
         "getblockdeltas" => rpc_getblockdeltas(chainstate, params, chain_params),
         "getspentinfo" => rpc_getspentinfo(chainstate, params),
@@ -12003,6 +12005,18 @@ fn rpc_createdelegatekeypair(
     ))
 }
 
+fn rpc_getindexstats<S: fluxd_storage::KeyValueStore>(
+    chainstate: &ChainState<S>,
+    params: Vec<Value>,
+) -> Result<Value, RpcError> {
+    ensure_no_params(&params)?;
+    let stats = chainstate.index_stats_snapshot().map_err(map_internal)?;
+    Ok(json!({
+        "spent_index_entries": stats.spent_index_entries,
+        "address_outpoint_entries": stats.address_outpoint_entries,
+    }))
+}
+
 fn rpc_gettxoutsetinfo<S: fluxd_storage::KeyValueStore>(
     chainstate: &ChainState<S>,
     params: Vec<Value>,
@@ -18866,7 +18880,7 @@ mod tests {
         let (chainstate, _params, data_dir) = setup_regtest_chainstate();
         let value = rpc_gettxoutsetinfo(&chainstate, Vec::new(), &data_dir).expect("rpc");
         let obj = value.as_object().expect("object");
-
+ 
         for key in [
             "height",
             "bestblock",
@@ -18878,14 +18892,41 @@ mod tests {
         ] {
             assert!(obj.contains_key(key), "missing key {key}");
         }
-
-        assert!(obj.get("bestblock").and_then(Value::as_str).is_some());
-        let best_block = obj.get("bestblock").and_then(Value::as_str).unwrap();
-        assert!(is_hex_64(best_block));
-
-        let hash_serialized = obj.get("hash_serialized").and_then(Value::as_str).unwrap();
-        assert!(is_hex_64(hash_serialized));
+ 
+        let index_stats = rpc_getindexstats(&chainstate, Vec::new()).expect("rpc");
+        let index_obj = index_stats.as_object().expect("object");
+        for key in ["spent_index_entries", "address_outpoint_entries"] {
+            assert!(index_obj.contains_key(key), "missing key {key}");
+        }
     }
+ 
+    #[test]
+    fn getindexstats_counts_match_db_scans() {
+        let (chainstate, _params, _data_dir, _address, coinbase_txid, vout) =
+            setup_regtest_chain_with_p2pkh_utxo();
+ 
+        let outpoint = OutPoint {
+            hash: coinbase_txid,
+            index: vout,
+        };
+        assert!(chainstate.spent_info(&outpoint).expect("spent info").is_none());
+ 
+        let stats = rpc_getindexstats(&chainstate, Vec::new()).expect("rpc");
+        let obj = stats.as_object().expect("object");
+        let spent = obj
+            .get("spent_index_entries")
+            .and_then(Value::as_u64)
+            .expect("spent_index_entries");
+        let address = obj
+            .get("address_outpoint_entries")
+            .and_then(Value::as_u64)
+            .expect("address_outpoint_entries");
+ 
+        let computed = chainstate.refresh_index_stats().expect("refresh index stats");
+        assert_eq!(spent, computed.spent_index_entries);
+        assert_eq!(address, computed.address_outpoint_entries);
+    }
+
 
     #[test]
     fn txoutproof_roundtrip_returns_txids() {

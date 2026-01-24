@@ -42,6 +42,7 @@ test('contract: registers core api/v1 routes', async () => {
     { method: 'GET', path: '/api/v1/addresses/:address/transactions' },
     { method: 'GET', path: '/api/v1/sync' },
     { method: 'GET', path: '/api/v1/stats/dashboard' },
+    { method: 'GET', path: '/api/v1/stats/index' },
     { method: 'GET', path: '/api/v1/estimatefee' },
     { method: 'GET', path: '/api/v1/supply' },
     { method: 'GET', path: '/api/v1/richlist' },

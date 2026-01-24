@@ -339,6 +339,25 @@ function fixturesGet(method: string, params?: Record<string, string | number | b
     return [FIXTURE_BLOCK_1.hash];
   }
 
+  if (method === 'gettxoutsetinfo') {
+    return {
+      height: FIXTURE_BLOCK_1.height,
+      bestblock: FIXTURE_BLOCK_1.hash,
+      transactions: 1,
+      txouts: 1,
+      bytes_serialized: 0,
+      hash_serialized: '0'.repeat(64),
+      total_amount: 0,
+    };
+  }
+
+  if (method === 'getindexstats') {
+    return {
+      spent_index_entries: 0,
+      address_outpoint_entries: 1,
+    };
+  }
+
   if (method === 'getaddressdeltas') {
     return [];
   }
@@ -1067,6 +1086,30 @@ export async function getRichList(
       nimbusCount: row?.nimbusCount != null ? toNumber(row.nimbusCount, 0) : undefined,
       stratusCount: row?.stratusCount != null ? toNumber(row.stratusCount, 0) : undefined,
     })),
+  };
+}
+
+export interface FluxIndexerIndexStatsResponse {
+  tipHeight: number;
+  utxoCount: number;
+  spentIndexCount: number;
+  addressOutpointCount: number;
+  generatedAt: string;
+}
+
+export async function getIndexStats(env: Env): Promise<FluxIndexerIndexStatsResponse> {
+  const [tipHeight, utxoSet, indexStats] = await Promise.all([
+    fluxdGet<number>(env, 'getblockcount', { params: JSON.stringify([]) }),
+    fluxdGet<any>(env, 'gettxoutsetinfo', { params: JSON.stringify([]) }),
+    fluxdGet<any>(env, 'getindexstats', { params: JSON.stringify([]) }),
+  ]);
+
+  return {
+    tipHeight: toNumber(tipHeight, 0),
+    utxoCount: toNumber(utxoSet?.txouts, 0),
+    spentIndexCount: toNumber(indexStats?.spent_index_entries, 0),
+    addressOutpointCount: toNumber(indexStats?.address_outpoint_entries, 0),
+    generatedAt: new Date().toISOString(),
   };
 }
 

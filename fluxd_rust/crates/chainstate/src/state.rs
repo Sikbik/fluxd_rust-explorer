@@ -2556,6 +2556,11 @@ impl<S: KeyValueStore> ChainState<S> {
                             }),
                         },
                     );
+                    if !created_in_block {
+                        let mut index_stats = self.index_stats_or_compute()?;
+                        index_stats.spent_index_entries = index_stats.spent_index_entries.saturating_add(1);
+                        self.update_index_stats(&mut batch, index_stats);
+                    }
                     let spent_delta = entry
                         .value
                         .checked_neg()
@@ -2611,6 +2616,14 @@ impl<S: KeyValueStore> ChainState<S> {
                             address_index_deletes = address_index_deletes.saturating_add(1);
                             self.address_index
                                 .delete_with_script_hash(&mut batch, key, &prevout);
+                            let mut index_stats = self.index_stats_or_compute()?;
+                            index_stats.address_outpoint_entries = index_stats.address_outpoint_entries.saturating_sub(1);
+                            if created_in_block {
+                                if address_key.is_some() {
+                                    index_stats.address_outpoint_entries = index_stats.address_outpoint_entries.saturating_add(1);
+                                }
+                            }
+                            self.update_index_stats(&mut batch, index_stats);
                         }
                         address_delta_inserts = address_delta_inserts.saturating_add(1);
                         self.address_deltas.insert_with_prefix(
@@ -2767,13 +2780,17 @@ impl<S: KeyValueStore> ChainState<S> {
             utxo_put_ops = utxo_put_ops.saturating_add(1);
             utxo_put_us = utxo_put_us.saturating_add(elapsed.as_micros() as u64);
 
-            if let Some(key) = created.address_key.as_ref() {
-                let index_start = Instant::now();
-                address_index_inserts = address_index_inserts.saturating_add(1);
-                self.address_index
-                    .insert_with_script_hash(&mut batch, key, &created.outpoint);
-                index_time += index_start.elapsed();
-            }
+                if let Some(key) = created.address_key.as_ref() {
+                    let index_start = Instant::now();
+                    address_index_inserts = address_index_inserts.saturating_add(1);
+                    self.address_index
+                        .insert_with_script_hash(&mut batch, key, &created.outpoint);
+                    let mut index_stats = self.index_stats_or_compute()?;
+                    index_stats.address_outpoint_entries = index_stats.address_outpoint_entries.saturating_add(1);
+                    self.update_index_stats(&mut batch, index_stats);
+                    index_time += index_start.elapsed();
+                }
+
         }
 
         let fluxnode_sig_checks_count = fluxnode_sig_checks.len() as u64;
@@ -3222,6 +3239,11 @@ impl<S: KeyValueStore> ChainState<S> {
                 self.utxos.delete(&mut batch, &outpoint);
                 self.address_index
                     .delete(&mut batch, &output.script_pubkey, &outpoint);
+                if crate::address_index::script_hash(&output.script_pubkey).is_some() {
+                    let mut index_stats = self.index_stats_or_compute()?;
+                    index_stats.address_outpoint_entries = index_stats.address_outpoint_entries.saturating_sub(1);
+                    self.update_index_stats(&mut batch, index_stats);
+                }
                 self.address_deltas.delete(
                     &mut batch,
                     &output.script_pubkey,
@@ -3252,6 +3274,11 @@ impl<S: KeyValueStore> ChainState<S> {
                         ));
                     }
                     self.spent_index.delete(&mut batch, &spent.outpoint);
+                    if spent.entry.height < height_u32 {
+                        let mut index_stats = self.index_stats_or_compute()?;
+                        index_stats.spent_index_entries = index_stats.spent_index_entries.saturating_sub(1);
+                        self.update_index_stats(&mut batch, index_stats);
+                    }
                     self.address_deltas.delete(
                         &mut batch,
                         &spent.entry.script_pubkey,
@@ -3267,6 +3294,11 @@ impl<S: KeyValueStore> ChainState<S> {
                         &spent.entry.script_pubkey,
                         &spent.outpoint,
                     );
+                    if crate::address_index::script_hash(&spent.entry.script_pubkey).is_some() {
+                        let mut index_stats = self.index_stats_or_compute()?;
+                        index_stats.address_outpoint_entries = index_stats.address_outpoint_entries.saturating_add(1);
+                        self.update_index_stats(&mut batch, index_stats);
+                    }
                     utxos_restored = utxos_restored
                         .checked_add(1)
                         .ok_or(ChainStateError::ValueOutOfRange)?;
@@ -4030,6 +4062,35 @@ impl<S: KeyValueStore> ChainState<S> {
         Ok(Some(stats))
     }
 
+    pub fn index_stats(&self) -> Result<Option<IndexStats>, ChainStateError> {
+        let bytes = match self.store.get(Column::Meta, INDEX_STATS_KEY)? {
+            Some(bytes) => bytes,
+            None => return Ok(None),
+        };
+        let stats = IndexStats::decode(&bytes)
+            .map_err(|_| ChainStateError::CorruptIndex("invalid index stats"))?;
+        Ok(Some(stats))
+    }
+
+    pub fn ensure_index_stats(&self) -> Result<IndexStats, ChainStateError> {
+        if let Some(stats) = self.index_stats()? {
+            return Ok(stats);
+        }
+        let stats = self.compute_index_stats()?;
+        let mut batch = WriteBatch::new();
+        self.update_index_stats(&mut batch, stats);
+        self.commit_batch(batch)?;
+        Ok(stats)
+
+    }
+
+    pub fn index_stats_or_compute(&self) -> Result<IndexStats, ChainStateError> {
+        if let Some(stats) = self.index_stats()? {
+            return Ok(stats);
+        }
+        self.compute_index_stats()
+    }
+
     pub fn ensure_utxo_stats(&self) -> Result<UtxoStats, ChainStateError> {
         if let Some(stats) = self.utxo_stats()? {
             return Ok(stats);
@@ -4048,6 +4109,22 @@ impl<S: KeyValueStore> ChainState<S> {
         self.compute_utxo_stats()
     }
 
+    pub fn index_stats_snapshot(&self) -> Result<IndexStats, ChainStateError> {
+        self.index_stats_or_compute()
+    }
+
+    pub fn update_index_stats(&self, batch: &mut WriteBatch, stats: IndexStats) {
+        batch.put(Column::Meta, INDEX_STATS_KEY, stats.encode());
+    }
+
+    pub fn refresh_index_stats(&self) -> Result<IndexStats, ChainStateError> {
+        let stats = self.compute_index_stats()?;
+        let mut batch = WriteBatch::new();
+        self.update_index_stats(&mut batch, stats);
+        self.commit_batch(batch)?;
+        Ok(stats)
+    }
+
     pub fn for_each_utxo_entry(
         &self,
         visitor: &mut dyn FnMut(&UtxoEntry) -> Result<(), StoreError>,
@@ -4059,6 +4136,32 @@ impl<S: KeyValueStore> ChainState<S> {
         };
         self.store.for_each_prefix(Column::Utxo, &[], &mut adapter)?;
         Ok(())
+    }
+
+    fn compute_index_stats(&self) -> Result<IndexStats, ChainStateError> {
+        let mut spent_index_entries = 0u64;
+        let mut spent_visitor = |_: &[u8], _: &[u8]| {
+            spent_index_entries = spent_index_entries.saturating_add(1);
+            Ok(())
+        };
+        self.store
+            .for_each_prefix(Column::SpentIndex, &[], &mut spent_visitor)?;
+
+        let mut address_outpoint_entries = 0u64;
+        let mut address_visitor = |_: &[u8], _: &[u8]| {
+            address_outpoint_entries = address_outpoint_entries.saturating_add(1);
+            Ok(())
+        };
+        self.store.for_each_prefix(
+            Column::AddressOutpoint,
+            &[],
+            &mut address_visitor,
+        )?;
+
+        Ok(IndexStats {
+            spent_index_entries,
+            address_outpoint_entries,
+        })
     }
 
     pub fn utxo_set_info(&self) -> Result<UtxoSetInfo, ChainStateError> {
@@ -4432,6 +4535,7 @@ const SPROUT_TREE_KEY: &[u8] = b"sprout_tree";
 const SAPLING_TREE_KEY: &[u8] = b"sapling_tree";
 const UTXO_STATS_KEY: &[u8] = b"utxo_stats_v1";
 const VALUE_POOLS_KEY: &[u8] = b"value_pools_v1";
+const INDEX_STATS_KEY: &[u8] = b"index_stats_v1";
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct UtxoStats {
@@ -4474,6 +4578,34 @@ pub struct UtxoSetInfo {
 pub struct ValuePools {
     pub sprout: i64,
     pub sapling: i64,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct IndexStats {
+    pub spent_index_entries: u64,
+    pub address_outpoint_entries: u64,
+}
+
+impl IndexStats {
+    fn encode(self) -> Vec<u8> {
+        let mut encoder = Encoder::new();
+        encoder.write_u64_le(self.spent_index_entries);
+        encoder.write_u64_le(self.address_outpoint_entries);
+        encoder.into_inner()
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
+        let mut decoder = Decoder::new(bytes);
+        let spent_index_entries = decoder.read_u64_le()?;
+        let address_outpoint_entries = decoder.read_u64_le()?;
+        if !decoder.is_empty() {
+            return Err(DecodeError::TrailingBytes);
+        }
+        Ok(Self {
+            spent_index_entries,
+            address_outpoint_entries,
+        })
+    }
 }
 
 fn encode_varint(mut value: u64) -> ([u8; 10], usize) {

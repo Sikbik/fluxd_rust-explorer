@@ -12,6 +12,7 @@ import {
   getTransaction,
   getSupplyStats,
   getDashboardStats,
+  getIndexStats,
   getRichList,
 } from './fluxindexer-adapter.js';
 import { fluxdGet } from './fluxindexer-adapter.js';
@@ -463,6 +464,15 @@ export function registerRoutes(app: Express, env: Env) {
   app.get('/api/v1/stats/dashboard', async (_req: Request, res: Response) => {
     try {
       const response = await getDashboardStats(env);
+      res.status(200).json(response);
+    } catch (error) {
+      upstreamUnavailable(res, 'upstream_unavailable', error instanceof Error ? error.message : 'Unknown error');
+    }
+  });
+
+  app.get('/api/v1/stats/index', async (_req: Request, res: Response) => {
+    try {
+      const response = await getIndexStats(env);
       res.status(200).json(response);
     } catch (error) {
       upstreamUnavailable(res, 'upstream_unavailable', error instanceof Error ? error.message : 'Unknown error');
