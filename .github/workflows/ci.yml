@@ -1,0 +1,63 @@
+name: ci
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  explorer-api:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: explorer-api/package-lock.json
+      - name: Install
+        working-directory: explorer-api
+        run: npm ci
+      - name: Build
+        working-directory: explorer-api
+        run: npm run build
+      - name: Test
+        working-directory: explorer-api
+        run: npm test
+
+  flux-explorer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: flux-explorer/package-lock.json
+      - name: Install
+        working-directory: flux-explorer
+        run: npm ci
+      - name: Build
+        working-directory: flux-explorer
+        run: npm run build
+
+  flux-explorer-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: flux-explorer/package-lock.json
+      - name: Install
+        working-directory: flux-explorer
+        run: npm ci
+      - name: Install Playwright
+        working-directory: flux-explorer
+        run: npx playwright install --with-deps chromium
+      - name: Smoke e2e
+        working-directory: flux-explorer
+        env:
+          CI: true
+        run: npm run test:e2e:smoke

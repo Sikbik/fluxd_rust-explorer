@@ -67,6 +67,8 @@ services:
       - explorer-api
     ports:
       - "42069:42069"
+    volumes:
+      - explorer-data:/app/data
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:42069', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
       interval: 30s
@@ -83,3 +85,4 @@ services:
 
 volumes:
   fluxd-data:
+  explorer-data:
