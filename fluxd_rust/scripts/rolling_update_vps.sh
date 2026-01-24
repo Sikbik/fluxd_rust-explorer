@@ -52,7 +52,9 @@ wait_http_200() {
   start="$(date +%s)"
 
   while true; do
-    if curl -sS -o /dev/null --max-time 5 -w "%{http_code}" "$url" | grep -q '^200$'; then
+    local code
+    code="$(curl -sS -o /dev/null --max-time 5 -w "%{http_code}" "$url" || true)"
+    if [[ "$code" == "200" ]]; then
       echo "OK: $name"
       return 0
     fi
@@ -68,8 +70,12 @@ wait_http_200() {
   done
 }
 
-echo "== Pre-flight: local daemon smoke =="
-./fluxd_rust/scripts/remote_smoke_test.sh --profile high
+echo "== Pre-flight: daemon smoke =="
+if [[ -x "./fluxd_rust/target/release/fluxd" ]]; then
+  ./fluxd_rust/scripts/remote_smoke_test.sh --profile high
+else
+  echo "Skipping remote_smoke_test.sh (no local fluxd binary)"
+fi
 
 echo
 
