@@ -1,7 +1,7 @@
 import express, { type Express } from 'express';
 import { randomUUID } from 'node:crypto';
 import { readEnv } from './env.js';
-import { registerRoutes } from './routes.js';
+import { noteSelfCheckResult, registerRoutes } from './routes.js';
 
 const app: Express = express();
 app.disable('x-powered-by');
@@ -162,4 +162,53 @@ app.listen(env.port, '0.0.0.0', () => {
     fetch(`http://127.0.0.1:${env.port}/api/v1/blocks/latest?limit=6`).catch(() => undefined);
     fetch(`http://127.0.0.1:${env.port}/api/v1/richlist?page=1&pageSize=100&minBalance=1`).catch(() => undefined);
   }, 60_000);
+
+  let lastSelfCheckAt: number | null = null;
+  let lastSelfCheckOk: boolean | null = null;
+  let lastSelfCheckError: string | null = null;
+  let selfCheckInFlight: Promise<void> | null = null;
+
+  async function runSelfCheck(now: number): Promise<void> {
+    try {
+      const verify = await fetch(`${env.fluxdRpcUrl}/daemon/verifychain?params=${encodeURIComponent(JSON.stringify([1, 6]))}`, {
+        headers: { accept: 'application/json' },
+        signal: AbortSignal.timeout(30_000),
+      });
+      if (!verify.ok) {
+        throw new Error(`verifychain failed: ${verify.status} ${verify.statusText}`);
+      }
+      const verifyJson = (await verify.json()) as any;
+      const ok = verifyJson && typeof verifyJson === 'object' && 'result' in verifyJson ? Boolean(verifyJson.result) : Boolean(verifyJson);
+      if (!ok) {
+        throw new Error('verifychain returned false');
+      }
+
+      lastSelfCheckAt = now;
+      lastSelfCheckOk = true;
+      lastSelfCheckError = null;
+      noteSelfCheckResult(now, true);
+    } catch (error) {
+      lastSelfCheckAt = now;
+      lastSelfCheckOk = false;
+      lastSelfCheckError = error instanceof Error ? error.message : String(error);
+      noteSelfCheckResult(now, false);
+    }
+  }
+
+  app.get('/api/self-check', (_req, res) => {
+    res.status(200).json({
+      lastSelfCheckAt,
+      lastSelfCheckOk,
+      lastSelfCheckError,
+    });
+  });
+
+  setInterval(() => {
+    const now = Date.now();
+    if (selfCheckInFlight) return;
+    selfCheckInFlight = runSelfCheck(now).finally(() => {
+      selfCheckInFlight = null;
+    });
+  }, 10 * 60_000);
+
 });

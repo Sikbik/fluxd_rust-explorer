@@ -49,6 +49,10 @@ export interface MetricsSnapshot {
   requestsTotal: number;
   inFlight: number;
   byPath: Record<string, { requests: number; errors: number; statusCounts: Record<string, number>; totalMs: number }>;
+  selfCheckRuns: number;
+  selfCheckFailures: number;
+  selfCheckLastAtMs: number | null;
+  selfCheckLastOk: boolean | null;
 }
 
 const metricsState: MetricsSnapshot = {
@@ -56,7 +60,18 @@ const metricsState: MetricsSnapshot = {
   requestsTotal: 0,
   inFlight: 0,
   byPath: {},
+  selfCheckRuns: 0,
+  selfCheckFailures: 0,
+  selfCheckLastAtMs: null,
+  selfCheckLastOk: null,
 };
+
+export function noteSelfCheckResult(atMs: number, ok: boolean): void {
+  metricsState.selfCheckRuns += 1;
+  metricsState.selfCheckLastAtMs = atMs;
+  metricsState.selfCheckLastOk = ok;
+  if (!ok) metricsState.selfCheckFailures += 1;
+}
 
 export function getMetricsSnapshot(): MetricsSnapshot {
   return {
@@ -64,6 +79,10 @@ export function getMetricsSnapshot(): MetricsSnapshot {
     requestsTotal: metricsState.requestsTotal,
     inFlight: metricsState.inFlight,
     byPath: JSON.parse(JSON.stringify(metricsState.byPath)) as MetricsSnapshot['byPath'],
+    selfCheckRuns: metricsState.selfCheckRuns,
+    selfCheckFailures: metricsState.selfCheckFailures,
+    selfCheckLastAtMs: metricsState.selfCheckLastAtMs,
+    selfCheckLastOk: metricsState.selfCheckLastOk,
   };
 }
 
@@ -144,6 +163,22 @@ export function registerRoutes(app: Express, env: Env) {
     body += `# HELP explorer_api_requests_in_flight In-flight requests\n`;
     body += `# TYPE explorer_api_requests_in_flight gauge\n`;
     body += `explorer_api_requests_in_flight ${snapshot.inFlight}\n`;
+
+    body += `# HELP explorer_api_self_check_runs_total Periodic self-check runs\n`;
+    body += `# TYPE explorer_api_self_check_runs_total counter\n`;
+    body += `explorer_api_self_check_runs_total ${snapshot.selfCheckRuns}\n`;
+
+    body += `# HELP explorer_api_self_check_failures_total Periodic self-check failures\n`;
+    body += `# TYPE explorer_api_self_check_failures_total counter\n`;
+    body += `explorer_api_self_check_failures_total ${snapshot.selfCheckFailures}\n`;
+
+    body += `# HELP explorer_api_self_check_last_ok Last self-check result\n`;
+    body += `# TYPE explorer_api_self_check_last_ok gauge\n`;
+    body += `explorer_api_self_check_last_ok ${snapshot.selfCheckLastOk === true ? 1 : 0}\n`;
+
+    body += `# HELP explorer_api_self_check_last_at_ms Last self-check time (ms since epoch)\n`;
+    body += `# TYPE explorer_api_self_check_last_at_ms gauge\n`;
+    body += `explorer_api_self_check_last_at_ms ${snapshot.selfCheckLastAtMs ?? 0}\n`;
 
     body += `# HELP explorer_api_requests_by_path_total Requests per normalized path\n`;
     body += `# TYPE explorer_api_requests_by_path_total counter\n`;
