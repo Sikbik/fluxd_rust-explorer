@@ -2,7 +2,7 @@
 # Optimized multi-stage build for Flux deployment
 
 # Stage 1: Dependencies
-FROM node:20-alpine AS deps
+FROM node:20.11.1-alpine AS deps
 RUN apk add --no-cache libc6-compat
 WORKDIR /app
 
@@ -13,7 +13,7 @@ COPY package.json package-lock.json* ./
 RUN npm ci
 
 # Stage 2: Builder
-FROM node:20-alpine AS builder
+FROM node:20.11.1-alpine AS builder
 WORKDIR /app
 
 # Copy dependencies
@@ -42,7 +42,7 @@ ENV NEXT_PUBLIC_API_MODE=$NEXT_PUBLIC_API_MODE
 RUN npm run build
 
 # Stage 3: Runner (Production)
-FROM node:20-alpine AS runner
+FROM node:20.11.1-alpine AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production

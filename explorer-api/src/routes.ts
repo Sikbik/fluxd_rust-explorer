@@ -23,6 +23,18 @@ function toInt(value: unknown): number | null {
   return Math.trunc(n);
 }
 
+function badRequest(res: Response, error: string, message?: string): void {
+  res.status(400).json({ error, message });
+}
+
+function upstreamUnavailable(res: Response, error: string, message?: string): void {
+  res.status(502).json({ error, message });
+}
+
+function notFound(res: Response, error: string, message?: string): void {
+  res.status(404).json({ error, message });
+}
+
 function clampInt(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -32,9 +44,142 @@ function isHexString(value: string, len: number): boolean {
   return /^[0-9a-fA-F]+$/.test(value);
 }
 
+export interface MetricsSnapshot {
+  startedAtMs: number;
+  requestsTotal: number;
+  inFlight: number;
+  byPath: Record<string, { requests: number; errors: number; statusCounts: Record<string, number>; totalMs: number }>;
+}
+
+const metricsState: MetricsSnapshot = {
+  startedAtMs: Date.now(),
+  requestsTotal: 0,
+  inFlight: 0,
+  byPath: {},
+};
+
+export function getMetricsSnapshot(): MetricsSnapshot {
+  return {
+    startedAtMs: metricsState.startedAtMs,
+    requestsTotal: metricsState.requestsTotal,
+    inFlight: metricsState.inFlight,
+    byPath: JSON.parse(JSON.stringify(metricsState.byPath)) as MetricsSnapshot['byPath'],
+  };
+}
+
+function normalizePath(path: string): string {
+  if (path.startsWith('/api/v1/blocks/')) {
+    if (path === '/api/v1/blocks/latest') return '/api/v1/blocks/latest';
+    if (path === '/api/v1/blocks/range') return '/api/v1/blocks/range';
+    return '/api/v1/blocks/:hashOrHeight';
+  }
+
+  if (path.startsWith('/api/v1/transactions/')) {
+    if (path === '/api/v1/transactions/batch') return '/api/v1/transactions/batch';
+    return '/api/v1/transactions/:txid';
+  }
+
+  if (path.startsWith('/api/v1/addresses/')) {
+    if (path.endsWith('/transactions')) return '/api/v1/addresses/:address/transactions';
+    if (path.endsWith('/utxos')) return '/api/v1/addresses/:address/utxos';
+    return '/api/v1/addresses/:address';
+  }
+
+  return path;
+}
+
 export function registerRoutes(app: Express, env: Env) {
-  app.get('/health', (_req: Request, res: Response) => {
-    res.status(200).json({ ok: true, service: 'explorer-api' });
+  app.use('/api/v1', (req: Request, res: Response, next) => {
+    const startedAt = Date.now();
+    metricsState.requestsTotal += 1;
+    metricsState.inFlight += 1;
+
+    res.on('finish', () => {
+      const elapsedMs = Date.now() - startedAt;
+      metricsState.inFlight = Math.max(0, metricsState.inFlight - 1);
+
+      const key = normalizePath(req.path);
+      const entry =
+        metricsState.byPath[key] ??
+        { requests: 0, errors: 0, statusCounts: {}, totalMs: 0 };
+
+      entry.requests += 1;
+      entry.totalMs += elapsedMs;
+
+      const statusKey = String(res.statusCode);
+      entry.statusCounts[statusKey] = (entry.statusCounts[statusKey] ?? 0) + 1;
+      if (res.statusCode >= 500) entry.errors += 1;
+
+      metricsState.byPath[key] = entry;
+    });
+
+    next();
+  });
+  app.get('/health', async (_req: Request, res: Response) => {
+    try {
+      await getDaemonStatus(env);
+      res.status(200).json({ ok: true, service: 'explorer-api', dependencies: { fluxd: 'ok' } });
+    } catch {
+      res.status(503).json({ ok: false, service: 'explorer-api', dependencies: { fluxd: 'error' } });
+    }
+  });
+
+  app.get('/ready', async (_req: Request, res: Response) => {
+    try {
+      await getDaemonStatus(env);
+      res.status(200).json({ ok: true });
+    } catch {
+      res.status(503).json({ ok: false });
+    }
+  });
+
+  app.get('/metrics', (_req: Request, res: Response) => {
+    const snapshot = getMetricsSnapshot();
+
+    let body = '';
+    body += `# HELP explorer_api_requests_total Total requests handled by explorer-api\n`;
+    body += `# TYPE explorer_api_requests_total counter\n`;
+    body += `explorer_api_requests_total ${snapshot.requestsTotal}\n`;
+
+    body += `# HELP explorer_api_requests_in_flight In-flight requests\n`;
+    body += `# TYPE explorer_api_requests_in_flight gauge\n`;
+    body += `explorer_api_requests_in_flight ${snapshot.inFlight}\n`;
+
+    body += `# HELP explorer_api_requests_by_path_total Requests per normalized path\n`;
+    body += `# TYPE explorer_api_requests_by_path_total counter\n`;
+
+    for (const [path, entry] of Object.entries(snapshot.byPath)) {
+      const label = path.replace(/\\/g, '\\\\').replace(/\"/g, '\\"');
+      body += `explorer_api_requests_by_path_total{path="${label}"} ${entry.requests}\n`;
+    }
+
+    body += `# HELP explorer_api_request_errors_total 5xx responses per path\n`;
+    body += `# TYPE explorer_api_request_errors_total counter\n`;
+
+    for (const [path, entry] of Object.entries(snapshot.byPath)) {
+      const label = path.replace(/\\/g, '\\\\').replace(/\"/g, '\\"');
+      body += `explorer_api_request_errors_total{path="${label}"} ${entry.errors}\n`;
+    }
+
+    body += `# HELP explorer_api_request_duration_ms_total Total request duration in ms per path\n`;
+    body += `# TYPE explorer_api_request_duration_ms_total counter\n`;
+
+    for (const [path, entry] of Object.entries(snapshot.byPath)) {
+      const label = path.replace(/\\/g, '\\\\').replace(/\"/g, '\\"');
+      body += `explorer_api_request_duration_ms_total{path="${label}"} ${entry.totalMs}\n`;
+    }
+
+    body += `# HELP explorer_api_request_status_total HTTP status counts per path\n`;
+    body += `# TYPE explorer_api_request_status_total counter\n`;
+
+    for (const [path, entry] of Object.entries(snapshot.byPath)) {
+      const pathLabel = path.replace(/\\/g, '\\\\').replace(/\"/g, '\\"');
+      for (const [status, count] of Object.entries(entry.statusCounts)) {
+        body += `explorer_api_request_status_total{path="${pathLabel}",status="${status}"} ${count}\n`;
+      }
+    }
+
+    res.status(200).type('text/plain; version=0.0.4').send(body);
   });
 
   let statusCache:
@@ -42,6 +187,7 @@ export function registerRoutes(app: Express, env: Env) {
     | null = null;
 
   app.get('/api/v1/status', async (_req: Request, res: Response) => {
+    res.setHeader('Cache-Control', 'public, max-age=0, s-maxage=2, stale-while-revalidate=10');
     try {
       const now = Date.now();
       const cached = statusCache;
@@ -67,10 +213,7 @@ export function registerRoutes(app: Express, env: Env) {
       statusCache = { at: now, value: payload };
       res.status(200).json(payload);
     } catch (error) {
-      res.status(502).json({
-        error: 'Failed to query fluxd_rust',
-        message: error instanceof Error ? error.message : 'Unknown error',
-      });
+      upstreamUnavailable(res, 'upstream_unavailable', error instanceof Error ? error.message : 'Unknown error');
     }
   });
 
@@ -97,10 +240,7 @@ export function registerRoutes(app: Express, env: Env) {
         return;
       }
 
-      res.status(502).json({
-        error: 'Failed to query fluxd_rust',
-        message: error instanceof Error ? error.message : 'Unknown error',
-      });
+      upstreamUnavailable(res, 'upstream_unavailable', error instanceof Error ? error.message : 'Unknown error');
     }
   });
 
@@ -109,7 +249,7 @@ export function registerRoutes(app: Express, env: Env) {
       const from = toInt(req.query.from);
       const to = toInt(req.query.to);
       if (from == null || to == null) {
-        res.status(400).json({ error: 'from and to are required' });
+        badRequest(res, 'invalid_request', 'from and to are required');
         return;
       }
 
@@ -117,7 +257,12 @@ export function registerRoutes(app: Express, env: Env) {
       const end = Math.max(from, to);
       const range = end - start;
       if (range > 10_000) {
-        res.status(400).json({ error: 'range too large' });
+        badRequest(res, 'invalid_request', 'range too large');
+        return;
+      }
+
+      if (range > 3000 && req.query.fields == null) {
+        badRequest(res, 'invalid_request', 'fields is required for large ranges');
         return;
       }
 
@@ -145,10 +290,7 @@ export function registerRoutes(app: Express, env: Env) {
 
       res.status(200).json(filtered);
     } catch (error) {
-      res.status(502).json({
-        error: 'Failed to query fluxd_rust',
-        message: error instanceof Error ? error.message : 'Unknown error',
-      });
+      upstreamUnavailable(res, 'upstream_unavailable', error instanceof Error ? error.message : 'Unknown error');
     }
   });
 
@@ -173,10 +315,7 @@ export function registerRoutes(app: Express, env: Env) {
       const block = height != null ? await getBlockByHeight(env, height) : await getBlockByHash(env, hashOrHeight);
       res.status(200).json(block);
     } catch (error) {
-      res.status(404).json({
-        error: 'not_found',
-        message: error instanceof Error ? error.message : 'Unknown error',
-      });
+      notFound(res, 'not_found', error instanceof Error ? error.message : 'Unknown error');
     }
   });
 
@@ -188,20 +327,18 @@ export function registerRoutes(app: Express, env: Env) {
       const tx = await getTransaction(env, txid, wantsHex);
       res.status(200).json(tx);
     } catch (error) {
-      res.status(404).json({
-        error: 'not_found',
-        message: error instanceof Error ? error.message : 'Unknown error',
-      });
+      notFound(res, 'not_found', error instanceof Error ? error.message : 'Unknown error');
     }
   });
 
   app.post('/api/v1/transactions/batch', express.json(), async (req: Request, res: Response) => {
     try {
       const txids = Array.isArray(req.body?.txids) ? req.body.txids : [];
-      if (txids.length === 0) {
-        res.status(400).json({ error: 'txids is required' });
-        return;
-      }
+       if (txids.length === 0) {
+         badRequest(res, 'invalid_request', 'txids is required');
+         return;
+       }
+
 
       const maxConcurrency = clampInt(toInt(req.query.concurrency) ?? 8, 1, 32);
 
@@ -210,10 +347,11 @@ export function registerRoutes(app: Express, env: Env) {
         .filter((id: string) => isHexString(id, 64))
         .slice(0, 100);
 
-      if (ids.length === 0) {
-        res.status(400).json({ error: 'txids must be 64-char hex strings' });
-        return;
-      }
+       if (ids.length === 0) {
+         badRequest(res, 'invalid_request', 'txids must be 64-char hex strings');
+         return;
+       }
+
 
       const transactions = new Array(ids.length);
       let cursor = 0;
@@ -241,10 +379,7 @@ export function registerRoutes(app: Express, env: Env) {
 
       res.status(200).json({ transactions });
     } catch (error) {
-      res.status(502).json({
-        error: 'Failed to query fluxd_rust',
-        message: error instanceof Error ? error.message : 'Unknown error',
-      });
+      upstreamUnavailable(res, 'upstream_unavailable', error instanceof Error ? error.message : 'Unknown error');
     }
   });
 
@@ -254,10 +389,7 @@ export function registerRoutes(app: Express, env: Env) {
       const response = await getAddressSummary(env, address);
       res.status(200).json(response);
     } catch (error) {
-      res.status(404).json({
-        error: 'not_found',
-        message: error instanceof Error ? error.message : 'Unknown error',
-      });
+      notFound(res, 'not_found', error instanceof Error ? error.message : 'Unknown error');
     }
   });
 
@@ -267,10 +399,7 @@ export function registerRoutes(app: Express, env: Env) {
       const response = await getAddressUtxos(env, address);
       res.status(200).json(response);
     } catch (error) {
-      res.status(502).json({
-        error: 'Failed to query fluxd_rust',
-        message: error instanceof Error ? error.message : 'Unknown error',
-      });
+      upstreamUnavailable(res, 'upstream_unavailable', error instanceof Error ? error.message : 'Unknown error');
     }
   });
 
@@ -278,7 +407,7 @@ export function registerRoutes(app: Express, env: Env) {
     try {
       const address = req.params.address;
 
-      const limit = clampInt(toInt(req.query.limit) ?? 25, 1, 250);
+      const limit = clampInt(toInt(req.query.limit) ?? 25, 1, 100);
       const offsetRaw = toInt(req.query.offset);
       const offset = offsetRaw != null ? Math.max(0, offsetRaw) : undefined;
 
@@ -305,10 +434,7 @@ export function registerRoutes(app: Express, env: Env) {
 
       res.status(200).json(response);
     } catch (error) {
-      res.status(502).json({
-        error: 'Failed to query fluxd_rust',
-        message: error instanceof Error ? error.message : 'Unknown error',
-      });
+      upstreamUnavailable(res, 'upstream_unavailable', error instanceof Error ? error.message : 'Unknown error');
     }
   });
 
@@ -331,10 +457,7 @@ export function registerRoutes(app: Express, env: Env) {
         },
       });
     } catch (error) {
-      res.status(502).json({
-        error: 'Failed to query fluxd_rust',
-        message: error instanceof Error ? error.message : 'Unknown error',
-      });
+      upstreamUnavailable(res, 'upstream_unavailable', error instanceof Error ? error.message : 'Unknown error');
     }
   });
 
@@ -343,10 +466,7 @@ export function registerRoutes(app: Express, env: Env) {
       const response = await getDashboardStats(env);
       res.status(200).json(response);
     } catch (error) {
-      res.status(502).json({
-        error: 'Failed to query fluxd_rust',
-        message: error instanceof Error ? error.message : 'Unknown error',
-      });
+      upstreamUnavailable(res, 'upstream_unavailable', error instanceof Error ? error.message : 'Unknown error');
     }
   });
 
@@ -356,10 +476,7 @@ export function registerRoutes(app: Express, env: Env) {
       const response = await fluxdGet<number>(env, 'estimatefee', { params: JSON.stringify([nbBlocks]) });
       res.status(200).json(response);
     } catch (error) {
-      res.status(502).json({
-        error: 'Failed to query fluxd_rust',
-        message: error instanceof Error ? error.message : 'Unknown error',
-      });
+      upstreamUnavailable(res, 'upstream_unavailable', error instanceof Error ? error.message : 'Unknown error');
     }
   });
 
@@ -372,6 +489,7 @@ export function registerRoutes(app: Express, env: Env) {
   }
 
   app.get('/api/v1/supply', async (_req: Request, res: Response) => {
+    res.setHeader('Cache-Control', 'public, max-age=0, s-maxage=60, stale-while-revalidate=300');
     const now = Date.now();
     const cached = supplyCache;
 
@@ -390,10 +508,7 @@ export function registerRoutes(app: Express, env: Env) {
       await refreshSupply(now);
       res.status(200).json(supplyCache?.value);
     } catch (error) {
-      res.status(502).json({
-        error: 'Failed to query fluxd_rust',
-        message: error instanceof Error ? error.message : 'Unknown error',
-      });
+      upstreamUnavailable(res, 'upstream_unavailable', error instanceof Error ? error.message : 'Unknown error');
     }
   });
 
@@ -407,6 +522,7 @@ export function registerRoutes(app: Express, env: Env) {
   }
 
   app.get('/api/v1/richlist', async (req: Request, res: Response) => {
+    res.setHeader('Cache-Control', 'public, max-age=0, s-maxage=60, stale-while-revalidate=300');
     const now = Date.now();
       const page = clampInt(toInt(req.query.page) ?? 1, 1, 1000);
       const pageSize = clampInt(toInt(req.query.pageSize) ?? 100, 1, 1000);
@@ -433,10 +549,7 @@ export function registerRoutes(app: Express, env: Env) {
       await refreshRichList(key, now, page, pageSize, minBalance);
       res.status(200).json(richListCache.get(key)?.value);
     } catch (error) {
-      res.status(502).json({
-        error: 'Failed to query fluxd_rust',
-        message: error instanceof Error ? error.message : 'Unknown error',
-      });
+      upstreamUnavailable(res, 'upstream_unavailable', error instanceof Error ? error.message : 'Unknown error');
     }
   });
 

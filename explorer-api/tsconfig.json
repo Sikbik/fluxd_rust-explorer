@@ -14,5 +14,8 @@
     "noEmitOnError": true
   },
   "include": ["src/**/*.ts"],
+  "ts-node": {
+    "esm": true
+  },
   "exclude": ["node_modules", "dist"]
 }

@@ -73,10 +73,32 @@ async function proxyRequest(
     // Reconstruct the path
     const path = pathSegments.join('/');
 
-    // Security: Ensure only API routes are proxied
-    if (!path.startsWith('api/v')) {
+    if (!path.startsWith('api/v1/')) {
       return NextResponse.json(
-        { error: "Only /api/v* routes can be proxied" },
+        { error: 'Only /api/v1/* routes can be proxied' },
+        { status: 403 }
+      );
+    }
+
+    const allowlistedPrefixes = [
+      'api/v1/status',
+      'api/v1/sync',
+      'api/v1/blocks/latest',
+      'api/v1/blocks/range',
+      'api/v1/blocks/',
+      'api/v1/transactions/batch',
+      'api/v1/transactions/',
+      'api/v1/addresses/',
+      'api/v1/stats/dashboard',
+      'api/v1/supply',
+      'api/v1/richlist',
+      'api/v1/estimatefee',
+    ];
+
+    const isAllowlisted = allowlistedPrefixes.some((prefix) => path === prefix || path.startsWith(prefix));
+    if (!isAllowlisted) {
+      return NextResponse.json(
+        { error: 'Route not allowlisted for proxy' },
         { status: 403 }
       );
     }
@@ -126,8 +148,7 @@ async function proxyRequest(
       try {
         const body = await request.text();
 
-        // Security: Limit request body size to prevent memory exhaustion
-        const MAX_BODY_SIZE = 1024 * 1024; // 1MB
+        const MAX_BODY_SIZE = 1024 * 1024;
         if (body.length > MAX_BODY_SIZE) {
           return NextResponse.json(
             { error: `Request body exceeds maximum size of ${MAX_BODY_SIZE} bytes` },
@@ -139,7 +160,6 @@ async function proxyRequest(
           options.body = body;
         }
       } catch {
-        // Body might not be available, continue without it
       }
     }
 
@@ -165,11 +185,6 @@ async function proxyRequest(
       }
     });
 
-    // Add CORS headers if needed
-    proxyResponse.headers.set('Access-Control-Allow-Origin', '*');
-    proxyResponse.headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
-    proxyResponse.headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-
     return proxyResponse;
 
   } catch (error) {
@@ -185,14 +200,3 @@ async function proxyRequest(
   }
 }
 
-// Handle OPTIONS for CORS preflight
-export async function OPTIONS() {
-  return new NextResponse(null, {
-    status: 204,
-    headers: {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, PATCH, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-    },
-  });
-}

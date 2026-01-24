@@ -1,0 +1,82 @@
+services:
+  fluxd:
+    build:
+      context: ./fluxd_rust
+      dockerfile: Dockerfile
+    container_name: fluxd
+    restart: unless-stopped
+    ports:
+      - "16125:16125"
+      - "127.0.0.1:16124:16124"
+      - "8080:8080"
+    volumes:
+      - fluxd-data:/data
+    command:
+      - "--network"
+      - "mainnet"
+      - "--backend"
+      - "fjall"
+      - "--data-dir"
+      - "/data"
+      - "--params-dir"
+      - "/data/params"
+      - "--fetch-params"
+      - "--rpc-addr"
+      - "0.0.0.0:16124"
+      - "--rpc-user"
+      - "${FLUXD_RPC_USER:-flux}"
+      - "--rpc-pass"
+      - "${FLUXD_RPC_PASS:-flux}"
+      - "--rpc-allow-ip"
+      - "0.0.0.0/0"
+      - "--dashboard-addr"
+      - "0.0.0.0:8080"
+
+  explorer-api:
+    build:
+      context: ./explorer-api
+      dockerfile: Dockerfile
+    container_name: explorer-api
+    restart: unless-stopped
+    environment:
+      - PORT=42067
+      - FLUXD_RPC_URL=http://fluxd:16124
+      - FLUXD_RPC_AUTH_MODE=basic
+      - FLUXD_RPC_USER=${FLUXD_RPC_USER:-flux}
+      - FLUXD_RPC_PASS=${FLUXD_RPC_PASS:-flux}
+    depends_on:
+      - fluxd
+    ports:
+      - "42067:42067"
+
+  flux-explorer:
+    build:
+      context: ./flux-explorer
+      dockerfile: Dockerfile
+    container_name: flux-explorer
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - NEXT_TELEMETRY_DISABLED=1
+      - HOSTNAME=0.0.0.0
+      - PORT=42069
+      - SERVER_API_URL=http://explorer-api:42067
+      - NEXT_PUBLIC_API_URL=http://explorer-api:42067
+    depends_on:
+      - explorer-api
+    ports:
+      - "42069:42069"
+
+  e2e:
+    build:
+      context: ./flux-explorer
+      dockerfile: Dockerfile.e2e
+    container_name: flux-explorer-e2e
+    depends_on:
+      - flux-explorer
+    environment:
+      - PLAYWRIGHT_BASE_URL=http://flux-explorer:42069
+      - CI=true
+
+volumes:
+  fluxd-data:

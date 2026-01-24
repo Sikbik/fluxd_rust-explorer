@@ -19,3 +19,52 @@ test('search route resolves numeric height to block page', async ({ page }) => {
   const errorLabel = page.getByText('Error Loading Block');
   await expect(blockHashLabel.or(errorLabel)).toBeVisible();
 });
+
+test('block detail renders transactions or error state', async ({ page }) => {
+  await page.goto('/block/1');
+
+  const transactionsHeading = page.getByRole('heading', { name: 'Transactions' });
+  const errorLabel = page.getByText('Error Loading Block');
+
+  await expect(transactionsHeading.or(errorLabel)).toBeVisible();
+});
+
+test('transaction detail renders core fields or error state', async ({ page }) => {
+  const fakeTxid = '0'.repeat(64);
+  await page.goto(`/tx/${fakeTxid}`);
+
+  const txHeading = page.getByRole('heading', { name: 'Transaction' });
+  const errorLabel = page.getByText('Error Loading Transaction');
+
+  await expect(txHeading.or(errorLabel)).toBeVisible();
+
+  if (await txHeading.isVisible()) {
+    await expect(page.getByText('Transaction ID')).toBeVisible();
+  }
+});
+
+test('address page renders core fields or error state', async ({ page }) => {
+  const fakeAddress = 't1' + 'a'.repeat(33);
+  await page.goto(`/address/${fakeAddress}`);
+
+  const addressHeading = page.getByRole('heading', { name: 'Address' });
+  const errorLabel = page.getByText('Error Loading Address');
+
+  await expect(addressHeading.or(errorLabel)).toBeVisible();
+
+  if (await addressHeading.isVisible()) {
+    await expect(page.getByText('Address')).toBeVisible();
+  }
+});
+
+test('rich list page loads or shows degraded state', async ({ page }) => {
+  await page.goto('/rich-list');
+
+  await expect(page.getByRole('heading', { name: 'Flux Rich List', level: 1 })).toBeVisible();
+
+  const loading = page.getByText('Loading rich list...');
+  const error = page.getByText('fetch failed');
+  const table = page.getByRole('table');
+
+  await expect(loading.or(error).or(table)).toBeVisible({ timeout: 30_000 });
+});
