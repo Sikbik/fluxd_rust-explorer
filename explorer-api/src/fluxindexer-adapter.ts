@@ -848,8 +848,120 @@ export async function getDashboardStats(env: Env): Promise<{
   const tipHash = await fluxdGet<string>(env, 'getblockhash', { params: JSON.stringify([tipHeight]) });
   const tipHeader = await fluxdGet<any>(env, 'getblockheader', { params: JSON.stringify([tipHash]) });
 
-  const now = new Date().toISOString();
+  const nowIso = new Date().toISOString();
   const latestTimestamp = toNumber(tipHeader.time, 0);
+
+  const tipUnix = latestTimestamp || Math.floor(Date.now() / 1000);
+  const windowSeconds = 24 * 60 * 60;
+  const low = Math.max(0, tipUnix - windowSeconds);
+
+  let txCount24h = 0;
+  try {
+    const hashes = await fluxdGet<string[]>(env, 'getblockhashes', { params: JSON.stringify([tipUnix, low, { noOrphans: true }]) });
+    const lastN = hashes.length > 250 ? hashes.slice(-250) : hashes;
+
+    const heights: number[] = [];
+    for (const hash of lastN) {
+      try {
+        const header = await fluxdGet<any>(env, 'getblockheader', { params: JSON.stringify([hash]) });
+        const h = toNumber(header.height, -1);
+        if (h >= 0) heights.push(h);
+      } catch {
+      }
+    }
+
+    if (heights.length > 0) {
+      const minHeight = Math.max(0, Math.min(...heights) - 50);
+      const maxHeight = Math.max(...heights);
+
+      const countRange = await fluxdGet<any>(env, 'getaddressdeltas', {
+        params: JSON.stringify([{ addresses: [], start: minHeight, end: maxHeight }]),
+      });
+
+      const countRows = Array.isArray(countRange) ? countRange : countRange?.deltas;
+      const unique = new Set<string>();
+      if (Array.isArray(countRows)) {
+        for (const row of countRows) {
+          const txid = typeof row?.txid === 'string' ? row.txid : null;
+          if (txid) unique.add(txid);
+        }
+      }
+      txCount24h = unique.size;
+    }
+  } catch {
+    txCount24h = 0;
+  }
+
+  let avgBlockTimeSeconds = 30;
+  try {
+    const sampleCount = 120;
+    const heights = Array.from({ length: Math.min(sampleCount, tipHeight) }, (_, idx) => tipHeight - idx).filter((h) => h >= 0);
+
+    const times: number[] = [];
+    for (const h of heights) {
+      try {
+        const hash = await fluxdGet<string>(env, 'getblockhash', { params: JSON.stringify([h]) });
+        const header = await fluxdGet<any>(env, 'getblockheader', { params: JSON.stringify([hash]) });
+        const t = toNumber(header.time, 0);
+        if (t > 0) times.push(t);
+      } catch {
+      }
+    }
+
+    if (times.length >= 2) {
+      times.sort((a, b) => a - b);
+      const span = times[times.length - 1] - times[0];
+      const denom = times.length - 1;
+      if (span > 0 && denom > 0) {
+        avgBlockTimeSeconds = span / denom;
+      }
+    }
+  } catch {
+    avgBlockTimeSeconds = 30;
+  }
+
+  let latestRewards: Array<{
+    height: number;
+    hash: string;
+    timestamp: number;
+    txid: string;
+    totalRewardSat: number;
+    totalReward: number;
+    outputs: Array<{ address: string | null; valueSat: number; value: number }>;
+  }> = [];
+
+  try {
+    const deltasResp = await fluxdGet<BlockDeltasResponse>(env, 'getblockdeltas', { params: JSON.stringify([tipHash]) });
+    const coinbase = Array.isArray(deltasResp.deltas) ? deltasResp.deltas[0] : null;
+    if (coinbase && Array.isArray(coinbase.outputs)) {
+      const outputs = coinbase.outputs
+        .filter((o) => typeof o?.satoshis === 'number' && Number.isFinite(o.satoshis) && o.satoshis > 0)
+        .map((o) => {
+          const sat = Math.trunc(o.satoshis ?? 0);
+          return {
+            address: typeof o?.address === 'string' && o.address.length > 0 ? o.address : null,
+            valueSat: sat,
+            value: amountToFluxNumber(BigInt(sat)),
+          };
+        });
+
+      const totalRewardSat = outputs.reduce((acc, o) => acc + o.valueSat, 0);
+
+      latestRewards = [
+        {
+          height: toNumber(deltasResp.height, tipHeight),
+          hash: toString(deltasResp.hash, tipHash),
+          timestamp: toNumber(deltasResp.time, latestTimestamp),
+          txid: toString(coinbase.txid),
+          totalRewardSat,
+          totalReward: amountToFluxNumber(BigInt(totalRewardSat)),
+          outputs,
+        },
+      ];
+    }
+  } catch {
+    latestRewards = [];
+  }
 
   return {
     latestBlock: {
@@ -858,10 +970,10 @@ export async function getDashboardStats(env: Env): Promise<{
       timestamp: latestTimestamp || null,
     },
     averages: {
-      blockTimeSeconds: 30,
+      blockTimeSeconds: avgBlockTimeSeconds,
     },
-    transactions24h: 0,
-    latestRewards: [],
-    generatedAt: now,
+    transactions24h: txCount24h,
+    latestRewards,
+    generatedAt: nowIso,
   };
 }
