@@ -29,6 +29,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
+    "test:e2e": "playwright test",
+    "test:e2e:smoke": "playwright test e2e/smoke.spec.ts",
     "populate-prices": "tsx scripts/populate-price-history.ts",
     "update-prices": "tsx scripts/populate-price-history.ts daily"
   },
@@ -61,6 +63,7 @@
     "tsx": "^4.7.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.58.0",
     "@types/node": "^20",
     "@types/react": "^18",
     "@types/react-dom": "^18",
