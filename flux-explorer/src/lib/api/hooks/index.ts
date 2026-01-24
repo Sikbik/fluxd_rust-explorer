@@ -35,6 +35,7 @@ export {
 
 // Network hooks
 export {
+  useNetworkStatus,
   useSyncStatus,
   useBlockchainStats,
   useSupply,

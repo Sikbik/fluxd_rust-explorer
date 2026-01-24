@@ -233,15 +233,21 @@ export function registerRoutes(app: Express, env: Env) {
 
       const status = await getDaemonStatus(env);
 
-      const payload = {
+        const nowIso = new Date().toISOString();
+        const currentHeight = status.daemon?.blocks ?? 0;
+        const chainHeight = status.daemon?.headers ?? 0;
+        const progress = chainHeight > 0 ? String(currentHeight / chainHeight) : '0';
+
+        const payload = {
         ...status,
         indexer: {
-          syncing: false,
-          synced: true,
-          currentHeight: status.daemon?.blocks ?? 0,
-          chainHeight: status.daemon?.headers ?? 0,
-          progress: '1.0',
-          lastSyncTime: null,
+          syncing: currentHeight < chainHeight,
+          synced: currentHeight >= chainHeight,
+          currentHeight,
+          chainHeight,
+          progress,
+          lastSyncTime: nowIso,
+          generatedAt: nowIso,
         },
       };
 

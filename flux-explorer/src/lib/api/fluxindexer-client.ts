@@ -42,6 +42,7 @@ interface FluxIndexerApiResponse {
     addressesIndexed?: number;
     percentage?: number;
     lastSyncTime: string | null;
+    generatedAt?: string;
   };
   daemon?: {
     version: string;
@@ -401,6 +402,7 @@ export class FluxIndexerAPI {
           errors: "",
           network: "livenet",
         },
+        indexer: response.indexer,
       };
     } catch (error) {
       throw new FluxIndexerAPIError(

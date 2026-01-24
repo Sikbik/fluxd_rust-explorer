@@ -7,6 +7,7 @@ import { useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Search, TrendingUp, Menu, X, Blocks } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { DataFreshness } from "@/components/DataFreshness";
 
 export function Header() {
   const pathname = usePathname();
@@ -68,6 +69,8 @@ export function Header() {
 
         {/* Spacer */}
         <div className="flex-1" />
+
+        <DataFreshness />
 
         {/* Search bar - only show on non-homepage */}
         {!isHomePage && (

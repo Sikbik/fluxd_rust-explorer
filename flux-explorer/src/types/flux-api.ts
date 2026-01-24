@@ -239,6 +239,20 @@ export interface AddressUTXO {
 // Network/Status Types
 // ============================================================================
 
+export interface IndexerStatus {
+  syncing: boolean;
+  synced: boolean;
+  currentHeight: number;
+  chainHeight: number;
+  progress: string;
+  blocksIndexed?: number;
+  transactionsIndexed?: number;
+  addressesIndexed?: number;
+  percentage?: number;
+  lastSyncTime: string | null;
+  generatedAt?: string;
+}
+
 export interface NetworkStatus {
   info: {
     version: number;
@@ -253,6 +267,8 @@ export interface NetworkStatus {
     errors: string;
     network: string;
   };
+
+  indexer?: IndexerStatus;
 }
 
 export interface SyncStatus {
