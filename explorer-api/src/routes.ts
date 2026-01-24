@@ -217,43 +217,81 @@ export function registerRoutes(app: Express, env: Env) {
     res.status(200).type('text/plain; version=0.0.4').send(body);
   });
 
+  const STATUS_CACHE_FRESH_MS = 2_000;
+  const STATUS_CACHE_STALE_MAX_MS = 5 * 60_000;
+
   let statusCache:
     | { at: number; value: unknown }
     | null = null;
 
+  let statusRefresh: Promise<{ at: number; value: unknown }> | null = null;
+
+  async function fetchStatusPayload(): Promise<{ at: number; value: unknown }> {
+    const at = Date.now();
+    const status = await getDaemonStatus(env);
+
+    const nowIso = new Date().toISOString();
+    const currentHeight = status.daemon?.blocks ?? 0;
+    const chainHeight = status.daemon?.headers ?? 0;
+    const progress = chainHeight > 0 ? String(currentHeight / chainHeight) : '0';
+
+    const payload = {
+      ...status,
+      indexer: {
+        syncing: currentHeight < chainHeight,
+        synced: currentHeight >= chainHeight,
+        currentHeight,
+        chainHeight,
+        progress,
+        lastSyncTime: nowIso,
+        generatedAt: nowIso,
+      },
+    };
+
+    return { at, value: payload };
+  }
+
+  function kickStatusRefresh(): Promise<{ at: number; value: unknown }> {
+    if (statusRefresh) return statusRefresh;
+
+    statusRefresh = fetchStatusPayload();
+
+    statusRefresh
+      .then((result) => {
+        statusCache = result;
+      })
+      .catch(() => {})
+      .finally(() => {
+        statusRefresh = null;
+      });
+
+    return statusRefresh;
+  }
+
   app.get('/api/v1/status', async (_req: Request, res: Response) => {
-    res.setHeader('Cache-Control', 'public, max-age=0, s-maxage=2, stale-while-revalidate=10');
+    res.setHeader('Cache-Control', 'public, max-age=0, s-maxage=2, stale-while-revalidate=60');
+
+    const now = Date.now();
+    const cached = statusCache;
+
+    if (cached && now - cached.at < STATUS_CACHE_STALE_MAX_MS) {
+      if (now - cached.at >= STATUS_CACHE_FRESH_MS) {
+        void kickStatusRefresh();
+      }
+
+      res.status(200).json(cached.value);
+      return;
+    }
+
     try {
-      const now = Date.now();
-      const cached = statusCache;
-      if (cached && now - cached.at < 2000) {
+      const result = await kickStatusRefresh();
+      res.status(200).json(result.value);
+    } catch (error) {
+      if (cached) {
         res.status(200).json(cached.value);
         return;
       }
 
-      const status = await getDaemonStatus(env);
-
-        const nowIso = new Date().toISOString();
-        const currentHeight = status.daemon?.blocks ?? 0;
-        const chainHeight = status.daemon?.headers ?? 0;
-        const progress = chainHeight > 0 ? String(currentHeight / chainHeight) : '0';
-
-        const payload = {
-        ...status,
-        indexer: {
-          syncing: currentHeight < chainHeight,
-          synced: currentHeight >= chainHeight,
-          currentHeight,
-          chainHeight,
-          progress,
-          lastSyncTime: nowIso,
-          generatedAt: nowIso,
-        },
-      };
-
-      statusCache = { at: now, value: payload };
-      res.status(200).json(payload);
-    } catch (error) {
       upstreamUnavailable(res, 'upstream_unavailable', error instanceof Error ? error.message : 'Unknown error');
     }
   });
