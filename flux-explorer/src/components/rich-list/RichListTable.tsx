@@ -73,8 +73,9 @@ export function RichListTable() {
         throw new Error(errorData.message || "Failed to fetch rich list");
       }
 
-      const richListData: RichListApiResponse = await richListResponse.json();
-      const annotated = annotateAddresses(richListData);
+       const richListData: RichListApiResponse = await richListResponse.json();
+       const annotated = richListData.addresses;
+
 
       // Parse supply data if available
       let circulatingSupply: number | undefined;
@@ -377,34 +378,35 @@ export function RichListTable() {
                             </div>
                           )}
                         </div>
-                        {address.label && (
-                          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground mt-1">
-                            {(() => {
-                              const category = address.category ?? "Unknown";
-                              const color = richListCategoryColors[category] ?? richListCategoryColors.Unknown;
+                         {(() => {
+                           const labelInfo = richListLabelMap.get(address.address);
+                           if (!labelInfo) return null;
 
-                              return (
-                                <Badge
-                                  variant="outline"
-                                  className="border-transparent"
-                                  style={{ backgroundColor: `${color}1A`, color }}
-                                >
-                                  {category}
-                                </Badge>
-                              );
-                            })()}
-                            <span className="font-medium text-foreground">{address.label}</span>
-                            {address.locked && (
-                              <span className="inline-flex items-center gap-1 text-xs text-amber-500">
-                                <Lock className="h-3 w-3" />
-                                Locked
-                              </span>
-                            )}
-                            {address.note && (
-                              <span className="text-muted-foreground">{address.note}</span>
-                            )}
-                          </div>
-                        )}
+                           const category = labelInfo.category ?? "Unknown";
+                           const color = richListCategoryColors[category] ?? richListCategoryColors.Unknown;
+
+                           return (
+                             <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground mt-1">
+                               <Badge
+                                 variant="outline"
+                                 className="border-transparent"
+                                 style={{ backgroundColor: `${color}1A`, color }}
+                               >
+                                 {category}
+                               </Badge>
+                               <span className="font-medium text-foreground">{labelInfo.label}</span>
+                               {labelInfo.locked && (
+                                 <span className="inline-flex items-center gap-1 text-xs text-amber-500">
+                                   <Lock className="h-3 w-3" />
+                                   Locked
+                                 </span>
+                               )}
+                               {labelInfo.note && (
+                                 <span className="text-muted-foreground">{labelInfo.note}</span>
+                               )}
+                             </div>
+                           );
+                         })()}
                       </TableCell>
                       <TableCell className="text-right font-mono">
                         {formatBalance(address.balance)}
@@ -469,32 +471,6 @@ export function RichListTable() {
   );
 }
 
-function annotateAddresses(response: RichListApiResponse): RichListAddress[] {
-  const totalSupplyFlux = response.totalSupply;
-  const addresses = response.addresses.map((entry) => {
-    const mapping = richListLabelMap.get(entry.address);
-    const balanceFlux = entry.balance;
-    const percentage =
-      totalSupplyFlux > 0 ? (balanceFlux / totalSupplyFlux) * 100 : 0;
-
-    return {
-      rank: entry.rank,
-      address: entry.address,
-      balance: balanceFlux,
-      percentage,
-      txCount: entry.txCount,
-      cumulusCount: entry.cumulusCount,
-      nimbusCount: entry.nimbusCount,
-      stratusCount: entry.stratusCount,
-      label: mapping?.label,
-      category: mapping?.category,
-      note: mapping?.note,
-      locked: mapping?.locked,
-    };
-  });
-
-  return addresses;
-}
 
 function buildCategoryBreakdown(
   addresses: RichListAddress[],
