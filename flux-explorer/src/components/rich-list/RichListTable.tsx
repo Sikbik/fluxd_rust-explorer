@@ -74,8 +74,18 @@ export function RichListTable() {
       }
 
        const richListData: RichListApiResponse = await richListResponse.json();
-       const annotated = richListData.addresses;
+       const annotated = richListData.addresses.map((addr) => {
+         const labelInfo = richListLabelMap.get(addr.address);
+         if (!labelInfo) return addr;
 
+         return {
+           ...addr,
+           category: labelInfo.category ?? addr.category,
+           label: labelInfo.label ?? addr.label,
+           note: labelInfo.note ?? addr.note,
+           locked: labelInfo.locked ?? addr.locked,
+         };
+       });
 
       // Parse supply data if available
       let circulatingSupply: number | undefined;
@@ -657,7 +667,7 @@ function RichListDistribution({
               <input
                 type="checkbox"
                 checked={!excludeSwapPools}
-                onChange={(e) => setExcludeSwapPools(!e.target.checked)}
+                onChange={() => setExcludeSwapPools((prev) => !prev)}
                 className="rounded border-gray-300 text-primary focus:ring-primary"
               />
               <span>Include Parallel Asset Swap Pools</span>
