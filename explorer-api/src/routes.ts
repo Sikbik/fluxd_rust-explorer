@@ -23,6 +23,15 @@ function toInt(value: unknown): number | null {
   return Math.trunc(n);
 }
 
+function clampInt(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function isHexString(value: string, len: number): boolean {
+  if (value.length !== len) return false;
+  return /^[0-9a-fA-F]+$/.test(value);
+}
+
 export function registerRoutes(app: Express, env: Env) {
   app.get('/health', (_req: Request, res: Response) => {
     res.status(200).json({ ok: true, service: 'explorer-api' });
@@ -67,9 +76,10 @@ export function registerRoutes(app: Express, env: Env) {
 
   let latestBlocksCache: { at: number; limit: number; value: unknown } | null = null;
 
-  app.get('/api/v1/blocks/latest', async (req: Request, res: Response) => {
-    const now = Date.now();
-    const limit = toInt(req.query.limit) ?? 10;
+   app.get('/api/v1/blocks/latest', async (req: Request, res: Response) => {
+     const now = Date.now();
+     const limit = clampInt(toInt(req.query.limit) ?? 10, 1, 50);
+
 
     const cached = latestBlocksCache;
     if (cached && cached.limit === limit && now - cached.at < 15_000) {
@@ -100,6 +110,14 @@ export function registerRoutes(app: Express, env: Env) {
       const to = toInt(req.query.to);
       if (from == null || to == null) {
         res.status(400).json({ error: 'from and to are required' });
+        return;
+      }
+
+      const start = Math.min(from, to);
+      const end = Math.max(from, to);
+      const range = end - start;
+      if (range > 10_000) {
+        res.status(400).json({ error: 'range too large' });
         return;
       }
 
@@ -185,11 +203,19 @@ export function registerRoutes(app: Express, env: Env) {
         return;
       }
 
-      const maxConcurrency = Math.max(1, Math.min(toInt(req.query.concurrency) ?? 8, 32));
+      const maxConcurrency = clampInt(toInt(req.query.concurrency) ?? 8, 1, 32);
 
-      const ids = txids.map((id: unknown) => String(id));
+      const ids = txids
+        .map((id: unknown) => String(id))
+        .filter((id: string) => isHexString(id, 64))
+        .slice(0, 100);
+
+      if (ids.length === 0) {
+        res.status(400).json({ error: 'txids must be 64-char hex strings' });
+        return;
+      }
+
       const transactions = new Array(ids.length);
-
       let cursor = 0;
       const workers = Array.from({ length: Math.min(maxConcurrency, ids.length) }, async () => {
         while (true) {
@@ -252,8 +278,9 @@ export function registerRoutes(app: Express, env: Env) {
     try {
       const address = req.params.address;
 
-      const limit = toInt(req.query.limit) ?? 25;
-      const offset = toInt(req.query.offset) ?? undefined;
+      const limit = clampInt(toInt(req.query.limit) ?? 25, 1, 250);
+      const offsetRaw = toInt(req.query.offset);
+      const offset = offsetRaw != null ? Math.max(0, offsetRaw) : undefined;
 
       const cursorHeight = toInt(req.query.cursorHeight) ?? undefined;
       const cursorTxIndex = toInt(req.query.cursorTxIndex) ?? undefined;
@@ -381,9 +408,10 @@ export function registerRoutes(app: Express, env: Env) {
 
   app.get('/api/v1/richlist', async (req: Request, res: Response) => {
     const now = Date.now();
-    const page = toInt(req.query.page) ?? 1;
-    const pageSize = toInt(req.query.pageSize) ?? 100;
-    const minBalance = toInt(req.query.minBalance) ?? 1;
+      const page = clampInt(toInt(req.query.page) ?? 1, 1, 1000);
+      const pageSize = clampInt(toInt(req.query.pageSize) ?? 100, 1, 1000);
+      const minBalance = Math.max(0, toInt(req.query.minBalance) ?? 1);
+
 
 
     const key = `${page}:${pageSize}:${minBalance}`;
