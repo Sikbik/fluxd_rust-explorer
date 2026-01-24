@@ -85,7 +85,7 @@ async function fluxdDaemonGetFromBaseUrl<T>(env: Env, baseUrl: string, method: s
 
   const url = `${baseUrl}/daemon/${method}`;
 
-  const response = await fetch(url, { headers, signal: AbortSignal.timeout(2_000) });
+  const response = await fetch(url, { headers, signal: AbortSignal.timeout(5_000) });
   if (!response.ok) {
     const text = await response.text().catch(() => '');
     throw new Error(`fluxd_rust /daemon/${method} failed: ${response.status} ${response.statusText}${text ? `: ${text}` : ''}`);
