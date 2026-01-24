@@ -587,13 +587,15 @@ export async function getLatestBlocks(env: Env, limit: number): Promise<{ blocks
   const blocks = await Promise.all(
     heights.map(async (h) => {
       const hash = await fluxdGet<string>(env, 'getblockhash', { params: JSON.stringify([h]) });
-      const header = await fluxdGet<any>(env, 'getblockheader', { params: JSON.stringify([hash]) });
+      const verbose = 1;
+      const block = await fluxdGet<any>(env, 'getblock', { params: JSON.stringify([hash, verbose]) });
+      const txs = Array.isArray(block?.tx) ? block.tx : [];
       return {
-        height: toNumber(header.height, h),
-        hash: toString(header.hash, hash),
-        time: toNumber(header.time),
-        size: undefined,
-        txCount: undefined,
+        height: toNumber(block?.height, h),
+        hash: toString(block?.hash, hash),
+        time: toNumber(block?.time),
+        size: toNumber(block?.size, 0),
+        txCount: txs.length,
       };
     })
   );
@@ -652,7 +654,7 @@ export async function getTransaction(env: Env, txid: string, includeHex: boolean
 
 export async function getAddressSummary(env: Env, address: string): Promise<{ address: string; balance: string; totalReceived: string; totalSent: string; unconfirmedBalance: string; unconfirmedTxs: number; txs: number; transactions: Array<{ txid: string }> }> {
   const [balance, txids, mempoolDeltas] = await Promise.all([
-    fluxdGet<any>(env, 'getaddressbalance', { params: JSON.stringify([{ address }]) }),
+    fluxdGet<any>(env, 'getaddressbalance', { params: JSON.stringify([{ addresses: [address] }]) }),
     fluxdGet<string[]>(env, 'getaddresstxids', { params: JSON.stringify([{ addresses: [address] }]) }),
     fluxdGet<any[]>(env, 'getaddressmempool', { params: JSON.stringify([{ addresses: [address] }]) }),
   ]);
