@@ -465,6 +465,8 @@ mod tests {
         fluxd_consensus::params::ChainParams,
         Hash256,
         OutPoint,
+        PathBuf,
+        Hash256,
     ) {
         let data_dir = temp_data_dir("fluxd-verifychain-test");
         std::fs::create_dir_all(&data_dir).expect("create data dir");
@@ -597,6 +599,7 @@ mod tests {
             header,
             transactions: vec![coinbase, spend_tx],
         };
+        let block_hash = block.header.hash();
         let block_bytes = block.consensus_encode().expect("encode block");
         let batch = chainstate
             .connect_block(
@@ -613,7 +616,7 @@ mod tests {
             .expect("connect block");
         chainstate.commit_batch(batch).expect("commit block");
 
-        (chainstate, params, spend_txid, seed_outpoint)
+        (chainstate, params, spend_txid, seed_outpoint, blocks_dir, block_hash)
     }
 
     #[test]
@@ -786,12 +789,17 @@ mod tests {
     fn verifychain_checklevel5_detects_missing_address_delta_credit() {
         let seed_script = p2pkh_script([0x11u8; 20]);
         let seed_value = 2 * COIN;
-        let (chainstate, _params, spend_txid, _seed_outpoint) =
+        let (chainstate, _params, spend_txid, _seed_outpoint, _blocks_dir, _block_hash) =
             setup_chain_with_seed_spend_block(seed_script, seed_value);
 
         verify_chain(&chainstate, 5, 1).expect("verifychain checklevel5 ok");
+        verify_chain(&chainstate, 1, 1).expect("verifychain checklevel1 ok");
+        verify_chain(&chainstate, 2, 1).expect("verifychain checklevel2 ok");
+        verify_chain(&chainstate, 3, 1).expect("verifychain checklevel3 ok");
+        verify_chain(&chainstate, 4, 1).expect("verifychain checklevel4 ok");
 
         let output_script = p2pkh_script([0x22u8; 20]);
+
         let script_hash =
             fluxd_chainstate::address_index::script_hash(&output_script).expect("script hash");
         let key = address_delta_key_bytes(&script_hash, 1, 1, &spend_txid, 0, false);
@@ -810,10 +818,14 @@ mod tests {
     fn verifychain_checklevel5_detects_missing_address_delta_spend() {
         let seed_script = p2pkh_script([0x11u8; 20]);
         let seed_value = 2 * COIN;
-        let (chainstate, _params, spend_txid, _seed_outpoint) =
+        let (chainstate, _params, spend_txid, _seed_outpoint, _blocks_dir, _block_hash) =
             setup_chain_with_seed_spend_block(seed_script.clone(), seed_value);
 
         verify_chain(&chainstate, 5, 1).expect("verifychain checklevel5 ok");
+        verify_chain(&chainstate, 1, 1).expect("verifychain checklevel1 ok");
+        verify_chain(&chainstate, 2, 1).expect("verifychain checklevel2 ok");
+        verify_chain(&chainstate, 3, 1).expect("verifychain checklevel3 ok");
+        verify_chain(&chainstate, 4, 1).expect("verifychain checklevel4 ok");
 
         let script_hash = fluxd_chainstate::address_index::script_hash(&seed_script).expect("hash");
         let key = address_delta_key_bytes(&script_hash, 1, 1, &spend_txid, 0, true);
@@ -832,9 +844,13 @@ mod tests {
     fn verifychain_checklevel5_detects_address_outpoint_mismatch() {
         let seed_script = p2pkh_script([0x11u8; 20]);
         let seed_value = 2 * COIN;
-        let (chainstate, _params, spend_txid, _seed_outpoint) =
+        let (chainstate, _params, spend_txid, _seed_outpoint, _blocks_dir, _block_hash) =
             setup_chain_with_seed_spend_block(seed_script, seed_value);
 
+        verify_chain(&chainstate, 1, 1).expect("verifychain checklevel1 ok");
+        verify_chain(&chainstate, 2, 1).expect("verifychain checklevel2 ok");
+        verify_chain(&chainstate, 3, 1).expect("verifychain checklevel3 ok");
+        verify_chain(&chainstate, 4, 1).expect("verifychain checklevel4 ok");
         verify_chain(&chainstate, 5, 1).expect("verifychain checklevel5 ok");
 
         let output_script = p2pkh_script([0x22u8; 20]);

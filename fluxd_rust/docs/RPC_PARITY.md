@@ -114,7 +114,7 @@ This file tracks parity targets with the C++ `fluxd` RPC surface. Statuses:
 - getfluxnodeoutputs - Implemented (wallet-less; uses fluxnode.conf + UTXO lookups)
 - startfluxnode - Implemented (uses wallet collateral key when available; supports wallet-less starts via optional `collateral_privkey_wif` + `redeem_script_hex` columns in `fluxnode.conf`; honors `lockwallet` for encrypted wallets; includes C++-style `transaction_*` detail fields + `reason`/`errorMessage`, plus `txid` on success)
 - startdeterministicfluxnode - Implemented (uses wallet collateral key when available; supports wallet-less starts via `collateral_privkey_wif` param or `fluxnode.conf` extra columns; honors `lockwallet`; includes C++-style `transaction_*` detail fields + `errorMessage`, plus `txid` on success; still simplified vs C++ behavior)
-- verifychain - Implemented (checks flatfile decode + header linkage + merkle root + txindex; `checklevel=4` verifies spent-index consistency; `checklevel=5` verifies address index consistency; does not re-apply full UTXO/script validation like C++)
+- verifychain - Implemented (walks backwards from tip; `checklevel=1` flatfile decode + header/height index linkage; `checklevel=2` merkle root; `checklevel=3` txindex; `checklevel=4` spent-index; `checklevel=5` address index; does not re-apply full UTXO/script validation like C++)
 - addnode - Implemented (accepts IPs and hostnames; best-effort DNS resolution used to seed the address book; stores the raw node string in the added-node list like C++)
 - clearbanned - Implemented
 - disconnectnode - Implemented (address-based; errors if the peer is not connected, like C++)
