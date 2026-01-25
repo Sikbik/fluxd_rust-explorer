@@ -941,7 +941,7 @@ export class FluxIndexerAPI {
    */
   static async getHomeSnapshot(): Promise<HomeSnapshot> {
     try {
-      return await api().get("api/v1/home").json<HomeSnapshot>();
+      return await api().get("api/v1/home", { timeout: 5_000, retry: 0 }).json<HomeSnapshot>();
     } catch (error) {
       throw new FluxIndexerAPIError(
         "Failed to fetch home snapshot",

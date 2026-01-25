@@ -11,7 +11,14 @@ export function RecentBlockRewards() {
   const { data: homeSnapshot, isLoading } = useHomeSnapshot();
   const latestReward = homeSnapshot?.dashboard?.latestRewards?.[0] ?? null;
   const tipHeight = homeSnapshot?.tipHeight ?? null;
-  const showReward = latestReward && tipHeight != null && latestReward.height === tipHeight;
+
+  const showReward = latestReward != null;
+  const rewardStatus =
+    latestReward && tipHeight != null
+      ? latestReward.height === tipHeight
+        ? "confirmed"
+        : "stale"
+      : "missing";
 
   const rewards = latestReward
     ? latestReward.outputs
@@ -76,6 +83,12 @@ export function RecentBlockRewards() {
                 <Coins className="h-4 w-4 text-[var(--flux-gold)]" />
                 Total Reward: <span className="text-[var(--flux-gold)] font-semibold">{totalReward.toFixed(2)} FLUX</span>
               </p>
+
+              {rewardStatus === "stale" ? (
+                <p className="text-xs text-[var(--flux-text-muted)] mt-2">
+                  Reward data is catching up (tip #{tipHeight?.toLocaleString()}).
+                </p>
+              ) : null}
             </div>
 
             {/* Reward Recipients */}

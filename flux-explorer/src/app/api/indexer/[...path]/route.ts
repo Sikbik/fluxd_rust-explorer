@@ -170,7 +170,7 @@ async function proxyRequest(
     const response = await fetch(targetUrl, {
       ...options,
       cache: 'no-store',
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(15_000),
     });
 
     // Get response body
@@ -189,6 +189,8 @@ async function proxyRequest(
         proxyResponse.headers.set(key, value);
       }
     });
+
+    proxyResponse.headers.set('Cache-Control', 'no-store');
 
     return proxyResponse;
 

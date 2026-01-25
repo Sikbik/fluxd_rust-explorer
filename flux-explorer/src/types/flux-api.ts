@@ -99,7 +99,7 @@ export interface HomeSnapshot {
   tipHash: string | null;
   tipTime: number | null;
   latestBlocks: BlockSummary[];
-  dashboard: DashboardStats;
+  dashboard: DashboardStats | null;
 }
 
 export interface DashboardStats {

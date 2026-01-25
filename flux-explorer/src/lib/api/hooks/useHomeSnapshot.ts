@@ -7,8 +7,8 @@ export function useHomeSnapshot() {
   return useQuery<HomeSnapshot, Error>({
     queryKey: ["home-snapshot"],
     queryFn: () => FluxAPI.getHomeSnapshot(),
-    staleTime: 2 * 1000,
-    refetchInterval: 2 * 1000,
+    staleTime: 0,
+    refetchInterval: 1000,
     refetchIntervalInBackground: true,
     retry: false,
     placeholderData: (previousData) => previousData,
