@@ -366,13 +366,31 @@ export function registerRoutes(app: Express, env: Env) {
       ? (blocksLatest as any).blocks[0]
       : null;
 
+    const latestBlocks = Array.isArray((blocksLatest as any)?.blocks)
+      ? (blocksLatest as any).blocks.map((block: any) => {
+          const txCount = block.txCount ?? block.tx_count ?? block.txlength ?? 0;
+          const nodeCount = block.nodeConfirmationCount ?? block.node_confirmation_count ?? 0;
+          const regularTxCount = block.regularTxCount ?? block.regular_tx_count ?? Math.max(0, txCount - nodeCount);
+
+          return {
+            height: block.height,
+            hash: block.hash,
+            time: block.time ?? block.timestamp ?? 0,
+            size: block.size ?? 0,
+            txlength: txCount,
+            nodeConfirmationCount: nodeCount,
+            regularTxCount,
+          };
+        })
+      : [];
+
     homeSnapshotCache = {
       at: now,
       value: {
         tipHeight: latestBlockFromBlocks?.height ?? dashboard?.latestBlock?.height ?? 0,
         tipHash: latestBlockFromBlocks?.hash ?? dashboard?.latestBlock?.hash ?? null,
         tipTime: latestBlockFromBlocks?.time ?? dashboard?.latestBlock?.timestamp ?? null,
-        latestBlocks: (blocksLatest as any)?.blocks ?? [],
+        latestBlocks,
         dashboard,
       },
     };
