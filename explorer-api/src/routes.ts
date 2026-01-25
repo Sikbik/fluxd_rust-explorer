@@ -655,8 +655,11 @@ export function registerRoutes(app: Express, env: Env) {
   let dashboardStatsRefresh: Promise<void> | null = null;
 
   async function refreshDashboardStats(now: number): Promise<void> {
-    const response = await getDashboardStats(env);
-    dashboardStatsCache = { at: now, value: response };
+    try {
+      const response = await getDashboardStats(env);
+      dashboardStatsCache = { at: now, value: response };
+    } catch {
+    }
   }
 
   app.get('/api/v1/stats/dashboard', async (_req: Request, res: Response) => {
