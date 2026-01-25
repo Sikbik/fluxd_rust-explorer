@@ -350,18 +350,31 @@ export function registerRoutes(app: Express, env: Env) {
     }
   });
 
-  const HOME_SNAPSHOT_FRESH_MS = 1_000;
-  const HOME_SNAPSHOT_STALE_MAX_MS = 3_000;
+  const HOME_SNAPSHOT_FRESH_MS = 250;
 
   let homeSnapshotCache: { at: number; value: unknown } | null = null;
   let homeSnapshotRefresh: Promise<void> | null = null;
 
-  async function refreshHomeSnapshot(now: number): Promise<void> {
-    const blocksLatest = await getLatestBlocks(env, 6);
+  async function refreshHomeSnapshot(): Promise<void> {
+    const tipHeight = await fluxdGet<number>(env, 'getblockcount', { params: JSON.stringify([]) });
     const dashboard = dashboardStatsCache?.value;
     if (dashboard == null) {
-      kickDashboardStatsRefresh(now);
+      kickDashboardStatsRefresh(Date.now());
     }
+
+    const existing = homeSnapshotCache?.value as any;
+    if (existing?.tipHeight === tipHeight && Array.isArray(existing?.latestBlocks) && existing.latestBlocks.length > 0) {
+      homeSnapshotCache = {
+        at: Date.now(),
+        value: {
+          ...existing,
+          dashboard: dashboard ?? null,
+        },
+      };
+      return;
+    }
+
+    const blocksLatest = await getLatestBlocks(env, 6, tipHeight);
 
     const latestBlockFromBlocks = Array.isArray((blocksLatest as any)?.blocks)
       ? (blocksLatest as any).blocks[0]
@@ -386,9 +399,9 @@ export function registerRoutes(app: Express, env: Env) {
       : [];
 
     homeSnapshotCache = {
-      at: now,
+      at: Date.now(),
       value: {
-        tipHeight: latestBlockFromBlocks?.height ?? (dashboard as any)?.latestBlock?.height ?? 0,
+        tipHeight: latestBlockFromBlocks?.height ?? (dashboard as any)?.latestBlock?.height ?? tipHeight,
         tipHash: latestBlockFromBlocks?.hash ?? (dashboard as any)?.latestBlock?.hash ?? null,
         tipTime: latestBlockFromBlocks?.time ?? (dashboard as any)?.latestBlock?.timestamp ?? null,
         latestBlocks,
@@ -397,26 +410,24 @@ export function registerRoutes(app: Express, env: Env) {
     };
   }
 
-  function kickHomeSnapshotRefresh(now: number): Promise<void> {
+  function kickHomeSnapshotRefresh(): Promise<void> {
     if (homeSnapshotRefresh) return homeSnapshotRefresh;
 
-    homeSnapshotRefresh = refreshHomeSnapshot(now)
-      .catch(() => {})
-      .finally(() => {
-        homeSnapshotRefresh = null;
-      });
+    homeSnapshotRefresh = refreshHomeSnapshot().finally(() => {
+      homeSnapshotRefresh = null;
+    });
 
     return homeSnapshotRefresh;
   }
 
   app.get('/api/v1/home', async (_req: Request, res: Response) => {
-    res.setHeader('Cache-Control', 'public, max-age=0, s-maxage=1, stale-while-revalidate=5');
+    res.setHeader('Cache-Control', 'no-store');
     const now = Date.now();
     const cached = homeSnapshotCache;
 
-    if (cached && now - cached.at < HOME_SNAPSHOT_STALE_MAX_MS) {
+    if (cached) {
       if (now - cached.at >= HOME_SNAPSHOT_FRESH_MS) {
-        void kickHomeSnapshotRefresh(now);
+        void kickHomeSnapshotRefresh();
       }
 
       res.status(200).json(cached.value);
@@ -424,14 +435,9 @@ export function registerRoutes(app: Express, env: Env) {
     }
 
     try {
-      await kickHomeSnapshotRefresh(now);
+      await kickHomeSnapshotRefresh();
       res.status(200).json(homeSnapshotCache?.value);
     } catch (error) {
-      if (cached) {
-        res.status(200).json(cached.value);
-        return;
-      }
-
       upstreamUnavailable(res, 'upstream_unavailable', error instanceof Error ? error.message : 'Unknown error');
     }
   });
@@ -750,9 +756,13 @@ export function registerRoutes(app: Express, env: Env) {
     });
   }
 
-  setInterval(() => {
+  const interval = setInterval(() => {
     kickDashboardStatsRefresh(Date.now());
   }, 2_000);
+
+  if (env.fixturesMode) {
+    clearInterval(interval);
+  }
 
   app.get('/api/v1/stats/dashboard', async (_req: Request, res: Response) => {
     res.setHeader('Cache-Control', 'public, max-age=0, s-maxage=2, stale-while-revalidate=60');
