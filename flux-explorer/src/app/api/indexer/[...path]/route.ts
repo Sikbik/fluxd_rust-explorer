@@ -83,6 +83,7 @@ async function proxyRequest(
     const allowlistedPrefixes = [
       'api/v1/status',
       'api/v1/sync',
+      'api/v1/home',
       'api/v1/blocks/latest',
       'api/v1/blocks/range',
       'api/v1/blocks/',
