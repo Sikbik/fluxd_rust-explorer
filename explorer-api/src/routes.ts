@@ -758,8 +758,8 @@ export function registerRoutes(app: Express, env: Env) {
     const key = `${page}:${pageSize}:${minBalance}`;
     const cached = richListCache.get(key);
 
-    if (cached && now - cached.at < 10 * 60_000) {
-      if (now - cached.at >= 60_000 && !richListRefresh.get(key)) {
+     if (cached && now - cached.at < 60 * 60_000) {
+       if (now - cached.at >= 10 * 60_000 && !richListRefresh.get(key)) {
         const refresh = refreshRichList(key, now, page, pageSize, minBalance).finally(() => {
           richListRefresh.delete(key);
         });
@@ -770,12 +770,26 @@ export function registerRoutes(app: Express, env: Env) {
       return;
     }
 
-    try {
-      await refreshRichList(key, now, page, pageSize, minBalance);
-      res.status(200).json(richListCache.get(key)?.value);
-    } catch (error) {
-      upstreamUnavailable(res, 'upstream_unavailable', error instanceof Error ? error.message : 'Unknown error');
-    }
+     try {
+       await refreshRichList(key, now, page, pageSize, minBalance);
+       res.status(200).json(richListCache.get(key)?.value);
+     } catch (error) {
+       const message = error instanceof Error ? error.message : 'Unknown error';
+       if (message.includes('rich list warming up')) {
+         res.status(200).json({
+           lastUpdate: new Date().toISOString(),
+           lastBlockHeight: 0,
+           totalSupply: '0',
+           totalAddresses: 0,
+           page,
+           pageSize,
+           totalPages: 0,
+           addresses: [],
+         });
+         return;
+       }
+       upstreamUnavailable(res, 'upstream_unavailable', message);
+     }
   });
 
 

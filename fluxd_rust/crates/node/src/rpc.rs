@@ -20,6 +20,164 @@ use sapling_crypto::{
     PaymentAddress,
 };
 use serde_json::{json, Number, Value};
+
+struct RichListCache {
+    computed_at: std::time::Instant,
+    last_block_height: i64,
+    total_supply: i64,
+    total_addresses: u64,
+    rows: Vec<(String, i64)>,
+}
+
+impl RichListCache {
+    fn to_response(&self, page: u32, page_size: u32, min_balance: i64) -> Value {
+        let eligible_addresses = self
+            .rows
+            .iter()
+            .filter(|(_, balance)| *balance >= min_balance)
+            .count() as u64;
+
+        let page_u64 = page as u64;
+        let page_size_u64 = page_size as u64;
+
+        let total_pages = if eligible_addresses == 0 {
+            0
+        } else {
+            ((eligible_addresses + page_size_u64 - 1) / page_size_u64).min(u64::from(u32::MAX))
+        };
+
+        let start = (page_u64 - 1).saturating_mul(page_size_u64) as usize;
+        let mut remaining_skip = start;
+        let mut addresses = Vec::new();
+
+        for (address, balance) in self.rows.iter() {
+            if *balance < min_balance {
+                continue;
+            }
+            if remaining_skip > 0 {
+                remaining_skip -= 1;
+                continue;
+            }
+            if addresses.len() >= page_size as usize {
+                break;
+            }
+
+            let rank = start.saturating_add(addresses.len()).saturating_add(1).min(u32::MAX as usize);
+            addresses.push(json!({
+                "rank": rank,
+                "address": address,
+                "balance": balance,
+                "txCount": 0,
+            }));
+        }
+
+        json!({
+            "lastUpdate": current_unix_seconds_u64().to_string(),
+            "generatedAt": current_unix_seconds_u64().to_string(),
+            "lastBlockHeight": self.last_block_height,
+            "totalSupply": self.total_supply,
+            "totalAddresses": eligible_addresses,
+            "page": page,
+            "pageSize": page_size,
+            "totalPages": total_pages,
+            "addresses": addresses,
+        })
+    }
+}
+
+static RICHLIST_CACHE: std::sync::OnceLock<std::sync::Mutex<Option<RichListCache>>> = std::sync::OnceLock::new();
+static RICHLIST_REFRESH_IN_FLIGHT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+const RICHLIST_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+fn richlist_cache() -> &'static std::sync::Mutex<Option<RichListCache>> {
+    RICHLIST_CACHE.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+fn parse_richlist_params(params: &[Value]) -> Result<(u32, u32, i64), RpcError> {
+    if params.len() > 3 {
+        return Err(RpcError::new(
+            RPC_INVALID_PARAMETER,
+            "getrichlist expects 0 to 3 parameters",
+        ));
+    }
+
+    let page = match params.get(0) {
+        Some(value) if !value.is_null() => parse_u32(value, "page")?.max(1),
+        _ => 1,
+    };
+
+    let page_size = match params.get(1) {
+        Some(value) if !value.is_null() => parse_u32(value, "pageSize")?.clamp(1, 1000),
+        _ => 100,
+    };
+
+    let min_balance = match params.get(2) {
+        Some(value) if !value.is_null() => {
+            let raw = parse_i64(value, "minBalance")?;
+            if raw < 0 {
+                return Err(RpcError::new(
+                    RPC_INVALID_PARAMETER,
+                    "minBalance must be non-negative",
+                ));
+            }
+            raw
+        }
+        _ => 1,
+    };
+
+    Ok((page, page_size, min_balance))
+}
+
+fn refresh_richlist_cache<S: fluxd_storage::KeyValueStore>(
+    chainstate: &ChainState<S>,
+    chain_params: &ChainParams,
+) -> Result<(), RpcError> {
+    let best = chainstate.best_block().map_err(map_internal)?;
+    let last_block_height = best.map(|tip| tip.height.max(0) as i64).unwrap_or(0);
+
+    let utxo_stats = chainstate.utxo_stats_or_compute().map_err(map_internal)?;
+    let total_supply = utxo_stats.total_amount;
+
+    let mut balances: HashMap<String, i64> = HashMap::new();
+
+    chainstate
+        .for_each_utxo_entry(&mut |entry| {
+            if entry.value <= 0 {
+                return Ok(());
+            }
+            let Some(address) =
+                script_pubkey_to_address(&entry.script_pubkey, chain_params.network)
+            else {
+                return Ok(());
+            };
+
+            let slot = balances.entry(address).or_insert(0);
+            *slot = slot
+                .checked_add(entry.value)
+                .ok_or_else(|| fluxd_storage::StoreError::Backend("address balance overflow".to_string()))?;
+
+            Ok(())
+        })
+        .map_err(map_internal)?;
+
+    let total_addresses = balances.len() as u64;
+
+    let mut rows: Vec<(String, i64)> = balances.into_iter().collect();
+    rows.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+
+    let mut guard = richlist_cache()
+        .lock()
+        .map_err(|_| map_internal("richlist cache lock poisoned"))?;
+    *guard = Some(RichListCache {
+        computed_at: std::time::Instant::now(),
+        last_block_height,
+        total_supply,
+        total_addresses,
+        rows,
+    });
+
+    Ok(())
+}
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, watch};
@@ -1285,6 +1443,41 @@ fn dispatch_method<S: fluxd_storage::KeyValueStore + 'static>(
     params: Vec<Value>,
     ctx: &RpcContext<S>,
 ) -> Result<Value, RpcError> {
+    if method == "getrichlist" {
+        let (page, page_size, min_balance) = parse_richlist_params(&params)?;
+
+        {
+            let guard = richlist_cache()
+                .lock()
+                .map_err(|_| map_internal("richlist cache lock poisoned"))?;
+            if let Some(existing) = guard.as_ref() {
+                if existing.computed_at.elapsed() < RICHLIST_CACHE_TTL {
+                    return Ok(existing.to_response(page, page_size, min_balance));
+                }
+            }
+        }
+
+        if RICHLIST_REFRESH_IN_FLIGHT
+            .compare_exchange(false, true, std::sync::atomic::Ordering::SeqCst, std::sync::atomic::Ordering::SeqCst)
+            .is_ok()
+        {
+            let chainstate = Arc::clone(&ctx.chainstate);
+            let chain_params = ctx.chain_params.clone();
+            tokio::task::spawn_blocking(move || {
+                let _ = refresh_richlist_cache(chainstate.as_ref(), &chain_params);
+                RICHLIST_REFRESH_IN_FLIGHT.store(false, std::sync::atomic::Ordering::SeqCst);
+            });
+        }
+
+        let guard = richlist_cache()
+            .lock()
+            .map_err(|_| map_internal("richlist cache lock poisoned"))?;
+        if let Some(existing) = guard.as_ref() {
+            return Ok(existing.to_response(page, page_size, min_balance));
+        }
+
+        return Err(RpcError::new(RPC_INTERNAL_ERROR, "rich list warming up"));
+    }
     let chainstate = ctx.chainstate.as_ref();
     let store = ctx.store.as_ref();
     let write_lock = ctx.write_lock.as_ref();
@@ -12066,118 +12259,43 @@ fn rpc_getrichlist<S: fluxd_storage::KeyValueStore>(
     params: Vec<Value>,
     chain_params: &ChainParams,
 ) -> Result<Value, RpcError> {
-    if params.len() > 3 {
-        return Err(RpcError::new(
-            RPC_INVALID_PARAMETER,
-            "getrichlist expects 0 to 3 parameters",
-        ));
-    }
+    let (page, page_size, min_balance) = parse_richlist_params(&params)?;
 
-    let page = match params.get(0) {
-        Some(value) if !value.is_null() => {
-            let page = parse_u32(value, "page")?;
-            page.max(1)
-        }
-        _ => 1,
-    };
-
-    let page_size = match params.get(1) {
-        Some(value) if !value.is_null() => {
-            let size = parse_u32(value, "pageSize")?;
-            size.clamp(1, 1000)
-        }
-        _ => 100,
-    };
-
-    let min_balance = match params.get(2) {
-        Some(value) if !value.is_null() => {
-            let raw = parse_i64(value, "minBalance")?;
-            if raw < 0 {
-                return Err(RpcError::new(
-                    RPC_INVALID_PARAMETER,
-                    "minBalance must be non-negative",
-                ));
+    {
+        let guard = richlist_cache()
+            .lock()
+            .map_err(|_| map_internal("richlist cache lock poisoned"))?;
+        if let Some(existing) = guard.as_ref() {
+            if existing.computed_at.elapsed() < RICHLIST_CACHE_TTL {
+                return Ok(existing.to_response(page, page_size, min_balance));
             }
-            raw
-        }
-        _ => 1,
-    };
-
-    let best = chainstate.best_block().map_err(map_internal)?;
-    let last_block_height = best.map(|tip| tip.height.max(0)).unwrap_or(0);
-
-    let utxo_stats = chainstate.utxo_stats_or_compute().map_err(map_internal)?;
-
-    let mut balances: HashMap<String, i64> = HashMap::new();
-    let mut eligible_addresses: u64 = 0;
-
-    chainstate
-        .for_each_utxo_entry(&mut |entry| {
-            if entry.value <= 0 {
-                return Ok(());
-            }
-            let Some(address) =
-                script_pubkey_to_address(&entry.script_pubkey, chain_params.network)
-            else {
-                return Ok(());
-            };
-
-            let slot = balances.entry(address).or_insert(0);
-            *slot = slot
-                .checked_add(entry.value)
-                .ok_or_else(|| fluxd_storage::StoreError::Backend("address balance overflow".to_string()))?;
-
-            Ok(())
-        })
-        .map_err(map_internal)?;
-
-    let mut rows: Vec<(String, i64)> = Vec::with_capacity(balances.len());
-    for (address, balance) in balances {
-        if balance >= min_balance {
-            eligible_addresses = eligible_addresses.saturating_add(1);
-            rows.push((address, balance));
         }
     }
 
-    rows.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-
-    let page_u64 = page as u64;
-    let page_size_u64 = page_size as u64;
-    let total_pages = if eligible_addresses == 0 {
-        0
-    } else {
-        ((eligible_addresses + page_size_u64 - 1) / page_size_u64)
-            .min(u64::from(u32::MAX))
-    };
-
-    let start = (page_u64 - 1).saturating_mul(page_size_u64) as usize;
-    let end = start.saturating_add(page_size as usize).min(rows.len());
-
-    let mut addresses = Vec::new();
-    for (idx, (address, balance)) in rows[start..end].iter().enumerate() {
-        let rank = start
-            .saturating_add(idx)
-            .saturating_add(1)
-            .min(u32::MAX as usize);
-        addresses.push(json!({
-            "rank": rank,
-            "address": address,
-            "balance": balance,
-            "txCount": 0,
-        }));
+    if RICHLIST_REFRESH_IN_FLIGHT
+        .compare_exchange(
+            false,
+            true,
+            std::sync::atomic::Ordering::SeqCst,
+            std::sync::atomic::Ordering::SeqCst,
+        )
+        .is_ok()
+    {
+        match refresh_richlist_cache(chainstate, chain_params) {
+            Ok(()) => {}
+            Err(_) => {}
+        }
+        RICHLIST_REFRESH_IN_FLIGHT.store(false, std::sync::atomic::Ordering::SeqCst);
     }
 
-    Ok(json!({
-        "lastUpdate": current_unix_seconds_u64().to_string(),
-        "generatedAt": current_unix_seconds_u64().to_string(),
-        "lastBlockHeight": last_block_height,
-        "totalSupply": utxo_stats.total_amount,
-        "totalAddresses": eligible_addresses,
-        "page": page,
-        "pageSize": page_size,
-        "totalPages": total_pages,
-        "addresses": addresses,
-    }))
+    let guard = richlist_cache()
+        .lock()
+        .map_err(|_| map_internal("richlist cache lock poisoned"))?;
+    if let Some(existing) = guard.as_ref() {
+        return Ok(existing.to_response(page, page_size, min_balance));
+    }
+
+    Err(RpcError::new(RPC_INTERNAL_ERROR, "rich list warming up"))
 }
 
 fn rpc_verifychain<S: fluxd_storage::KeyValueStore>(
