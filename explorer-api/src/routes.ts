@@ -350,8 +350,8 @@ export function registerRoutes(app: Express, env: Env) {
     }
   });
 
-  const HOME_SNAPSHOT_FRESH_MS = 2_000;
-  const HOME_SNAPSHOT_STALE_MAX_MS = 10_000;
+  const HOME_SNAPSHOT_FRESH_MS = 1_000;
+  const HOME_SNAPSHOT_STALE_MAX_MS = 3_000;
 
   let homeSnapshotCache: { at: number; value: unknown } | null = null;
   let homeSnapshotRefresh: Promise<void> | null = null;
@@ -391,7 +391,7 @@ export function registerRoutes(app: Express, env: Env) {
   }
 
   app.get('/api/v1/home', async (_req: Request, res: Response) => {
-    res.setHeader('Cache-Control', 'public, max-age=0, s-maxage=2, stale-while-revalidate=10');
+    res.setHeader('Cache-Control', 'public, max-age=0, s-maxage=1, stale-while-revalidate=5');
     const now = Date.now();
     const cached = homeSnapshotCache;
 
