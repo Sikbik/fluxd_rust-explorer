@@ -64,6 +64,9 @@ export interface FluxIndexerBlockResponse {
     order: number;
     kind: 'coinbase' | 'transfer' | 'fluxnode_start' | 'fluxnode_confirm' | 'fluxnode_other';
     isCoinbase: boolean;
+    fluxnodeType?: number | null;
+    fluxnodeTier?: string | null;
+    fluxnodeIp?: string | null;
     valueSat?: number;
     value?: number;
     valueInSat?: number;
@@ -108,6 +111,11 @@ export interface FluxIndexerTransactionResponse {
   vsize?: number;
   valueIn?: string;
   fees?: string;
+  nType?: number | null;
+  benchmarkTier?: string | null;
+  ip?: string | null;
+  collateralOutputHash?: string | null;
+  collateralOutputIndex?: number | null;
   hex?: string;
 }
 
@@ -224,6 +232,12 @@ type BlockDeltaTx = {
   index: number;
   inputs: Array<{ address?: string; satoshis?: number }>;
   outputs: Array<{ address?: string; satoshis?: number }>;
+
+  nType?: number;
+  ip?: string;
+  benchmarkTier?: string;
+  collateralOutputHash?: string;
+  collateralOutputIndex?: number;
 };
 
 type FixtureResponse = unknown;
@@ -509,11 +523,72 @@ export async function getBlockByHash(env: Env, hash: string): Promise<FluxIndexe
 
   const txs = Array.isArray(deltasResp.deltas) ? deltasResp.deltas : [];
 
-  const txDetails: NonNullable<FluxIndexerBlockResponse['txDetails']> = txs.map((tx, order) => {
+  type BlockTxDetail = {
+    txid: string;
+    order: number;
+    kind: 'coinbase' | 'transfer' | 'fluxnode_start' | 'fluxnode_confirm' | 'fluxnode_other';
+    isCoinbase: boolean;
+    fluxnodeType: number | null;
+    fluxnodeTier: string | null;
+    fluxnodeIp: string | null;
+    valueSat: number;
+    value: number;
+    valueInSat: number;
+    valueIn: number;
+    feeSat: number;
+    fee: number;
+    fromAddr: string | null;
+    toAddr: string | null;
+  };
+
+  const fluxnodeByTxid = new Map<string, { nType: number | null; ip: string | null; tier: string | null }>();
+  {
+    const ids = txs.map((tx) => toString(tx?.txid)).filter((id) => id.length === 64);
+    const needsLookup = ids.filter((txid) => {
+      const fluxnodeType = typeof txs.find((t) => t.txid === txid)?.nType === 'number'
+        ? (txs.find((t) => t.txid === txid)?.nType as number)
+        : null;
+      const inputs = Array.isArray(txs.find((t) => t.txid === txid)?.inputs) ? (txs.find((t) => t.txid === txid)?.inputs as unknown[]) : [];
+      return inputs.length === 0 && fluxnodeType == null;
+    });
+
+    const maxLookups = 30;
+    const suspect = needsLookup.slice(0, maxLookups);
+
+    const concurrency = 6;
+    let cursor = 0;
+    const workers = Array.from({ length: Math.min(concurrency, suspect.length) }, async () => {
+      while (true) {
+        const idx = cursor;
+        cursor += 1;
+        if (idx >= suspect.length) return;
+        const txid = suspect[idx];
+        try {
+          const tx = await fluxdGet<any>(env, 'getrawtransaction', { params: JSON.stringify([txid, 1]) });
+          const nType = typeof tx?.nType === 'number' ? tx.nType : null;
+          const ip = typeof tx?.ip === 'string' && tx.ip.length > 0 ? tx.ip : null;
+          const tier = typeof tx?.benchmarkTier === 'string' && tx.benchmarkTier.length > 0 ? tx.benchmarkTier : null;
+          if (nType != null) {
+            fluxnodeByTxid.set(txid, { nType, ip, tier });
+          }
+        } catch {
+        }
+      }
+    });
+    await Promise.all(workers);
+  }
+
+  const txDetails: BlockTxDetail[] = txs.map((tx, order) => {
     const inputs = Array.isArray(tx.inputs) ? tx.inputs : [];
     const outputs = Array.isArray(tx.outputs) ? tx.outputs : [];
 
-    const isCoinbase = inputs.length === 0;
+    const fallback = fluxnodeByTxid.get(toString(tx.txid));
+
+    const fluxnodeType = typeof tx.nType === 'number' ? tx.nType : fallback?.nType ?? null;
+    const fluxnodeIp = typeof tx.ip === 'string' && tx.ip.length > 0 ? tx.ip : fallback?.ip ?? null;
+    const fluxnodeTier = typeof tx.benchmarkTier === 'string' && tx.benchmarkTier.length > 0 ? tx.benchmarkTier : fallback?.tier ?? null;
+
+    const isCoinbase = inputs.length === 0 && fluxnodeType == null;
 
     const vinSat = inputs.reduce((acc: bigint, row) => acc + toSatoshiBigInt(row?.satoshis ?? 0), 0n);
     const voutSat = outputs.reduce((acc: bigint, row) => acc + toSatoshiBigInt(row?.satoshis ?? 0), 0n);
@@ -523,11 +598,16 @@ export async function getBlockByHash(env: Env, hash: string): Promise<FluxIndexe
     const fromAddr = inputs.find((i) => typeof i?.address === 'string' && i.address.length > 0)?.address ?? null;
     const toAddr = outputs.find((o) => typeof o?.address === 'string' && o.address.length > 0)?.address ?? null;
 
+    const kind = fluxnodeType === 2 ? 'fluxnode_start' : fluxnodeType === 4 ? 'fluxnode_confirm' : isCoinbase ? 'coinbase' : 'transfer';
+
     return {
       txid: toString(tx.txid),
       order,
-      kind: (isCoinbase ? 'coinbase' : 'transfer') as 'coinbase' | 'transfer',
+      kind,
       isCoinbase,
+      fluxnodeType,
+      fluxnodeIp,
+      fluxnodeTier,
       valueSat: Number(voutSat),
       value: amountToFluxNumber(voutSat),
       valueInSat: Number(vinSat),
@@ -539,22 +619,40 @@ export async function getBlockByHash(env: Env, hash: string): Promise<FluxIndexe
     };
   });
 
-  const coinbaseCount = txDetails.filter((d) => d.isCoinbase).length;
-  const transfers = Math.max(0, txDetails.length - coinbaseCount);
+  const coinbaseCount = txDetails.filter((d) => d.kind === 'coinbase').length;
+  const transfers = txDetails.filter((d) => d.kind === 'transfer').length;
+  const fluxnodeStart = txDetails.filter((d) => d.kind === 'fluxnode_start').length;
+  const fluxnodeConfirm = txDetails.filter((d) => d.kind === 'fluxnode_confirm').length;
+  const fluxnodeOther = txDetails.filter((d) => d.kind === 'fluxnode_other').length;
+
+  const tierCounts = { cumulus: 0, nimbus: 0, stratus: 0, starting: 0, unknown: 0 };
+  for (const tx of txDetails) {
+    if (tx.kind === 'fluxnode_start') {
+      tierCounts.starting += 1;
+      continue;
+    }
+    if (tx.kind === 'fluxnode_confirm') {
+      const tier = (tx.fluxnodeTier ?? '').toString().toUpperCase();
+      if (tier === 'CUMULUS') tierCounts.cumulus += 1;
+      else if (tier === 'NIMBUS') tierCounts.nimbus += 1;
+      else if (tier === 'STRATUS') tierCounts.stratus += 1;
+      else tierCounts.unknown += 1;
+    }
+  }
 
   const txSummary = {
     total: txDetails.length,
-    regular: transfers,
+    regular: transfers + coinbaseCount,
     coinbase: coinbaseCount,
     transfers,
-    fluxnodeStart: 0,
-    fluxnodeConfirm: 0,
-    fluxnodeOther: 0,
-    fluxnodeTotal: 0,
-    tierCounts: { cumulus: 0, nimbus: 0, stratus: 0, starting: 0, unknown: 0 },
+    fluxnodeStart,
+    fluxnodeConfirm,
+    fluxnodeOther,
+    fluxnodeTotal: fluxnodeStart + fluxnodeConfirm + fluxnodeOther,
+    tierCounts,
   };
 
-  const rewardSat = txDetails.find((d) => d.isCoinbase)?.valueSat ?? 0;
+  const rewardSat = txDetails.find((d) => d.kind === 'coinbase')?.valueSat ?? 0;
 
   return {
     hash: toString(deltasResp.hash, hash),
@@ -583,8 +681,12 @@ export async function getBlockByHeight(env: Env, height: number): Promise<FluxIn
   return getBlockByHash(env, hash);
 }
 
-export async function getLatestBlocks(env: Env, limit: number): Promise<{ blocks: Array<{ height: number; hash: string; time?: number; size?: number; txCount?: number }> }> {
-  const tipHeight = await fluxdGet<number>(env, 'getblockcount', { params: JSON.stringify([]) });
+export async function getLatestBlocks(
+  env: Env,
+  limit: number,
+  tipHeightHint?: number
+): Promise<{ blocks: Array<{ height: number; hash: string; time?: number; size?: number; txCount?: number }> }> {
+  const tipHeight = tipHeightHint ?? await fluxdGet<number>(env, 'getblockcount', { params: JSON.stringify([]) });
 
   const capped = Math.max(1, Math.min(Math.floor(limit), 50));
   const heights = [] as number[];
@@ -594,13 +696,12 @@ export async function getLatestBlocks(env: Env, limit: number): Promise<{ blocks
 
   const blocks = await Promise.all(
     heights.map(async (h) => {
-      const hash = await fluxdGet<string>(env, 'getblockhash', { params: JSON.stringify([h]) });
       const verbose = 1;
-      const block = await fluxdGet<any>(env, 'getblock', { params: JSON.stringify([hash, verbose]) });
+      const block = await fluxdGet<any>(env, 'getblock', { params: JSON.stringify([h, verbose]) });
       const txs = Array.isArray(block?.tx) ? block.tx : [];
       return {
         height: toNumber(block?.height, h),
-        hash: toString(block?.hash, hash),
+        hash: toString(block?.hash),
         time: toNumber(block?.time),
         size: toNumber(block?.size, 0),
         txCount: txs.length,
@@ -656,6 +757,11 @@ export async function getTransaction(env: Env, txid: string, includeHex: boolean
     time: toNumber(tx.time),
     size: toNumber(tx.size),
     vsize: toNumber(tx.vsize ?? tx.size),
+    nType: toOptionalNumber(tx.nType),
+    benchmarkTier: typeof tx.benchmarkTier === 'string' ? tx.benchmarkTier : null,
+    ip: typeof tx.ip === 'string' ? tx.ip : null,
+    collateralOutputHash: typeof tx.collateralOutputHash === 'string' ? tx.collateralOutputHash : null,
+    collateralOutputIndex: toOptionalNumber(tx.collateralOutputIndex),
     hex: includeHex ? toString(tx.hex) : undefined,
   };
 }
@@ -1123,19 +1229,25 @@ export async function getIndexStats(env: Env): Promise<FluxIndexerIndexStatsResp
   };
 }
 
+type DashboardRewardOutput = { address: string | null; valueSat: number; value: number };
+
+type DashboardLatestReward = {
+  height: number;
+  hash: string;
+  timestamp: number;
+  txid: string;
+  totalRewardSat: number;
+  totalReward: number;
+  outputs: Array<DashboardRewardOutput>;
+};
+
+let cachedTxCount24h: { atMs: number; value: number } | null = null;
+
 export async function getDashboardStats(env: Env): Promise<{
   latestBlock: { height: number; hash: string | null; timestamp: number | null };
   averages: { blockTimeSeconds: number };
   transactions24h: number;
-  latestRewards: Array<{
-    height: number;
-    hash: string;
-    timestamp: number;
-    txid: string;
-    totalRewardSat: number;
-    totalReward: number;
-    outputs: Array<{ address: string | null; valueSat: number; value: number }>;
-  }>;
+  latestRewards: Array<DashboardLatestReward>;
   generatedAt: string;
 }> {
   const tipHeight = await fluxdGet<number>(env, 'getblockcount', { params: JSON.stringify([]) });
@@ -1149,11 +1261,15 @@ export async function getDashboardStats(env: Env): Promise<{
   const windowSeconds = 24 * 60 * 60;
   const low = Math.max(0, tipUnix - windowSeconds);
 
-  let txCount24h = 0;
-  try {
-    const hashes = await fluxdGet<string[]>(env, 'getblockhashes', {
-      params: JSON.stringify([tipUnix, low, { noOrphans: true }]),
-    });
+  let txCount24h = cachedTxCount24h?.value ?? 0;
+  const txCountCacheAt = cachedTxCount24h?.atMs ?? 0;
+  const txCountCacheTtlMs = 5 * 60_000;
+
+  if (Date.now() - txCountCacheAt > txCountCacheTtlMs) {
+    try {
+      const hashes = await fluxdGet<string[]>(env, 'getblockhashes', {
+        params: JSON.stringify([tipUnix, low, { noOrphans: true }]),
+      });
 
     const lastN = hashes.length > 250 ? hashes.slice(-250) : hashes;
     if (lastN.length > 0) {
@@ -1187,8 +1303,11 @@ export async function getDashboardStats(env: Env): Promise<{
         txCount24h = unique.size;
       }
     }
-  } catch {
-    txCount24h = 0;
+
+      cachedTxCount24h = { atMs: Date.now(), value: txCount24h };
+    } catch {
+      txCount24h = cachedTxCount24h?.value ?? 0;
+    }
   }
 
   let avgBlockTimeSeconds = 30;
@@ -1213,15 +1332,7 @@ export async function getDashboardStats(env: Env): Promise<{
     avgBlockTimeSeconds = 30;
   }
 
-  let latestRewards: Array<{
-    height: number;
-    hash: string;
-    timestamp: number;
-    txid: string;
-    totalRewardSat: number;
-    totalReward: number;
-    outputs: Array<{ address: string | null; valueSat: number; value: number }>;
-  }> = [];
+  let latestRewards: Array<DashboardLatestReward> = [];
 
   try {
     const deltasResp = await fluxdGet<BlockDeltasResponse>(env, 'getblockdeltas', { params: JSON.stringify([tipHash]) });
