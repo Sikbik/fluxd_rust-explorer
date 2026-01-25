@@ -15,6 +15,9 @@ import { NextRequest, NextResponse } from 'next/server';
 // Get indexer URL from environment
 // Production (Flux/VPS): SERVER_API_URL set via docker-compose
 // Local dev: Falls back to 127.0.0.1:42067 (IPv4 explicit to avoid IPv6 issues)
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 const INDEXER_API_URL = process.env.SERVER_API_URL || 'http://127.0.0.1:42067';
 
 export async function GET(
@@ -166,6 +169,7 @@ async function proxyRequest(
 
     const response = await fetch(targetUrl, {
       ...options,
+      cache: 'no-store',
       signal: AbortSignal.timeout(30_000),
     });
 

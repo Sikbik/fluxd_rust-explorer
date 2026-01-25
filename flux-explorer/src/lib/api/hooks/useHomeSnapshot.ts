@@ -10,6 +10,7 @@ export function useHomeSnapshot() {
     staleTime: 2 * 1000,
     refetchInterval: 2 * 1000,
     refetchIntervalInBackground: true,
+    retry: false,
     placeholderData: (previousData) => previousData,
   });
 }
