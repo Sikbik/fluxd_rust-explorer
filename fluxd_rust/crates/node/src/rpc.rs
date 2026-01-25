@@ -87,7 +87,7 @@ impl RichListCache {
 
 static RICHLIST_CACHE: std::sync::OnceLock<std::sync::Mutex<Option<RichListCache>>> = std::sync::OnceLock::new();
 static RICHLIST_REFRESH_IN_FLIGHT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-const RICHLIST_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+const RICHLIST_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(2 * 60);
 
 fn richlist_cache() -> &'static std::sync::Mutex<Option<RichListCache>> {
     RICHLIST_CACHE.get_or_init(|| std::sync::Mutex::new(None))
