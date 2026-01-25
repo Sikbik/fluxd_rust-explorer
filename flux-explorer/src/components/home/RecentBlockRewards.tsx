@@ -9,7 +9,9 @@ import { getRewardLabel } from "@/lib/block-rewards";
 
 export function RecentBlockRewards() {
   const { data: homeSnapshot, isLoading } = useHomeSnapshot();
-  const latestReward = homeSnapshot?.dashboard?.latestRewards?.[0];
+  const latestReward = homeSnapshot?.dashboard?.latestRewards?.[0] ?? null;
+  const tipHeight = homeSnapshot?.tipHeight ?? null;
+  const showReward = latestReward && tipHeight != null && latestReward.height === tipHeight;
 
   const rewards = latestReward
     ? latestReward.outputs
@@ -60,7 +62,7 @@ export function RecentBlockRewards() {
               ))}
             </div>
           </div>
-        ) : latestReward ? (
+        ) : showReward ? (
           <div className="space-y-5">
             {/* Block Info */}
             <div>
