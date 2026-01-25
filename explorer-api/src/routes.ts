@@ -323,14 +323,81 @@ export function registerRoutes(app: Express, env: Env) {
 
   app.get('/api/v1/blocks/latest', async (req: Request, res: Response) => {
     res.setHeader('Cache-Control', 'public, max-age=0, s-maxage=2, stale-while-revalidate=60');
-
+ 
     const now = Date.now();
     const limit = clampInt(toInt(req.query.limit) ?? 10, 1, 50);
-
+ 
     const cached = latestBlocksCache.get(limit);
     if (cached && now - cached.at < LATEST_BLOCKS_CACHE_STALE_MAX_MS) {
       if (now - cached.at >= LATEST_BLOCKS_CACHE_FRESH_MS) {
         void kickLatestBlocksRefresh(limit);
+      }
+ 
+      res.status(200).json(cached.value);
+      return;
+    }
+ 
+    try {
+      await kickLatestBlocksRefresh(limit);
+      res.status(200).json(latestBlocksCache.get(limit)?.value);
+    } catch (error) {
+      if (cached) {
+        res.status(200).json(cached.value);
+        return;
+      }
+ 
+      upstreamUnavailable(res, 'upstream_unavailable', error instanceof Error ? error.message : 'Unknown error');
+    }
+  });
+
+  const HOME_SNAPSHOT_FRESH_MS = 2_000;
+  const HOME_SNAPSHOT_STALE_MAX_MS = 10_000;
+
+  let homeSnapshotCache: { at: number; value: unknown } | null = null;
+  let homeSnapshotRefresh: Promise<void> | null = null;
+
+  async function refreshHomeSnapshot(now: number): Promise<void> {
+    const [blocksLatest, dashboard] = await Promise.all([
+      getLatestBlocks(env, 6),
+      getDashboardStats(env),
+    ]);
+
+    const latestBlockFromBlocks = Array.isArray((blocksLatest as any)?.blocks)
+      ? (blocksLatest as any).blocks[0]
+      : null;
+
+    homeSnapshotCache = {
+      at: now,
+      value: {
+        tipHeight: latestBlockFromBlocks?.height ?? dashboard?.latestBlock?.height ?? 0,
+        tipHash: latestBlockFromBlocks?.hash ?? dashboard?.latestBlock?.hash ?? null,
+        tipTime: latestBlockFromBlocks?.time ?? dashboard?.latestBlock?.timestamp ?? null,
+        latestBlocks: (blocksLatest as any)?.blocks ?? [],
+        dashboard,
+      },
+    };
+  }
+
+  function kickHomeSnapshotRefresh(now: number): Promise<void> {
+    if (homeSnapshotRefresh) return homeSnapshotRefresh;
+
+    homeSnapshotRefresh = refreshHomeSnapshot(now)
+      .catch(() => {})
+      .finally(() => {
+        homeSnapshotRefresh = null;
+      });
+
+    return homeSnapshotRefresh;
+  }
+
+  app.get('/api/v1/home', async (_req: Request, res: Response) => {
+    res.setHeader('Cache-Control', 'public, max-age=0, s-maxage=2, stale-while-revalidate=10');
+    const now = Date.now();
+    const cached = homeSnapshotCache;
+
+    if (cached && now - cached.at < HOME_SNAPSHOT_STALE_MAX_MS) {
+      if (now - cached.at >= HOME_SNAPSHOT_FRESH_MS) {
+        void kickHomeSnapshotRefresh(now);
       }
 
       res.status(200).json(cached.value);
@@ -338,8 +405,8 @@ export function registerRoutes(app: Express, env: Env) {
     }
 
     try {
-      await kickLatestBlocksRefresh(limit);
-      res.status(200).json(latestBlocksCache.get(limit)?.value);
+      await kickHomeSnapshotRefresh(now);
+      res.status(200).json(homeSnapshotCache?.value);
     } catch (error) {
       if (cached) {
         res.status(200).json(cached.value);

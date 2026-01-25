@@ -46,6 +46,7 @@ test('contract: registers core api/v1 routes', async () => {
     { method: 'GET', path: '/api/v1/estimatefee' },
     { method: 'GET', path: '/api/v1/supply' },
     { method: 'GET', path: '/api/v1/richlist' },
+    { method: 'GET', path: '/api/v1/home' },
   ];
 
   for (const route of expected) {
