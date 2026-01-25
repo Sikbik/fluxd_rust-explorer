@@ -299,31 +299,26 @@ export function registerRoutes(app: Express, env: Env) {
   const LATEST_BLOCKS_CACHE_FRESH_MS = 2_000;
   const LATEST_BLOCKS_CACHE_STALE_MAX_MS = 5 * 60_000;
 
-  let latestBlocksCache: { at: number; limit: number; value: unknown } | null = null;
-  let latestBlocksRefresh: Promise<{ at: number; limit: number; value: unknown }> | null = null;
+  let latestBlocksCache = new Map<number, { at: number; value: unknown }>();
+  let latestBlocksRefresh = new Map<number, Promise<void>>();
 
-  async function fetchLatestBlocksPayload(limit: number): Promise<{ at: number; limit: number; value: unknown }> {
-    const at = Date.now();
-    const value = await getLatestBlocks(env, limit);
-    return { at, limit, value };
+  async function refreshLatestBlocks(limit: number): Promise<void> {
+    const response = await getLatestBlocks(env, limit);
+    latestBlocksCache.set(limit, { at: Date.now(), value: response });
   }
 
-  function kickLatestBlocksRefresh(limit: number): Promise<{ at: number; limit: number; value: unknown }> {
-    const inflight = latestBlocksRefresh;
+  function kickLatestBlocksRefresh(limit: number): Promise<void> {
+    const inflight = latestBlocksRefresh.get(limit);
     if (inflight) return inflight;
 
-    latestBlocksRefresh = fetchLatestBlocksPayload(limit);
-
-    latestBlocksRefresh
-      .then((result) => {
-        latestBlocksCache = result;
-      })
+    const refresh = refreshLatestBlocks(limit)
       .catch(() => {})
       .finally(() => {
-        latestBlocksRefresh = null;
+        latestBlocksRefresh.delete(limit);
       });
 
-    return latestBlocksRefresh;
+    latestBlocksRefresh.set(limit, refresh);
+    return refresh;
   }
 
   app.get('/api/v1/blocks/latest', async (req: Request, res: Response) => {
@@ -332,8 +327,8 @@ export function registerRoutes(app: Express, env: Env) {
     const now = Date.now();
     const limit = clampInt(toInt(req.query.limit) ?? 10, 1, 50);
 
-    const cached = latestBlocksCache;
-    if (cached && cached.limit === limit && now - cached.at < LATEST_BLOCKS_CACHE_STALE_MAX_MS) {
+    const cached = latestBlocksCache.get(limit);
+    if (cached && now - cached.at < LATEST_BLOCKS_CACHE_STALE_MAX_MS) {
       if (now - cached.at >= LATEST_BLOCKS_CACHE_FRESH_MS) {
         void kickLatestBlocksRefresh(limit);
       }
@@ -343,10 +338,10 @@ export function registerRoutes(app: Express, env: Env) {
     }
 
     try {
-      const result = await kickLatestBlocksRefresh(limit);
-      res.status(200).json(result.value);
+      await kickLatestBlocksRefresh(limit);
+      res.status(200).json(latestBlocksCache.get(limit)?.value);
     } catch (error) {
-      if (cached && cached.limit === limit) {
+      if (cached) {
         res.status(200).json(cached.value);
         return;
       }
