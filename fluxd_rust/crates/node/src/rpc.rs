@@ -12372,6 +12372,54 @@ fn rpc_getblockdeltas<S: fluxd_storage::KeyValueStore>(
         entry_obj.insert("txid".to_string(), Value::String(hash256_to_hex(&txid)));
         entry_obj.insert("index".to_string(), Value::Number((tx_index as i64).into()));
 
+        if let Some(fluxnode) = tx.fluxnode.as_ref() {
+            match fluxnode {
+                FluxnodeTx::V5(FluxnodeTxV5::Start(start)) => {
+                    entry_obj.insert("nType".to_string(), Value::Number(2.into()));
+                    entry_obj.insert(
+                        "collateralOutputHash".to_string(),
+                        Value::String(hash256_to_hex(&start.collateral.hash)),
+                    );
+                    entry_obj.insert(
+                        "collateralOutputIndex".to_string(),
+                        Value::Number((start.collateral.index as i64).into()),
+                    );
+                }
+                FluxnodeTx::V6(FluxnodeTxV6::Start(start)) => {
+                    entry_obj.insert("nType".to_string(), Value::Number(2.into()));
+                    let collateral = match &start.variant {
+                        FluxnodeStartVariantV6::Normal { collateral, .. } => collateral,
+                        FluxnodeStartVariantV6::P2sh { collateral, .. } => collateral,
+                    };
+                    entry_obj.insert(
+                        "collateralOutputHash".to_string(),
+                        Value::String(hash256_to_hex(&collateral.hash)),
+                    );
+                    entry_obj.insert(
+                        "collateralOutputIndex".to_string(),
+                        Value::Number((collateral.index as i64).into()),
+                    );
+                }
+                FluxnodeTx::V5(FluxnodeTxV5::Confirm(confirm))
+                | FluxnodeTx::V6(FluxnodeTxV6::Confirm(confirm)) => {
+                    entry_obj.insert("nType".to_string(), Value::Number(4.into()));
+                    entry_obj.insert("ip".to_string(), Value::String(confirm.ip.clone()));
+                    entry_obj.insert(
+                        "benchmarkTier".to_string(),
+                        Value::String(fluxnode_tier_name(confirm.benchmark_tier).to_string()),
+                    );
+                    entry_obj.insert(
+                        "collateralOutputHash".to_string(),
+                        Value::String(hash256_to_hex(&confirm.collateral.hash)),
+                    );
+                    entry_obj.insert(
+                        "collateralOutputIndex".to_string(),
+                        Value::Number((confirm.collateral.index as i64).into()),
+                    );
+                }
+            }
+        }
+
         let mut inputs = Vec::new();
         let is_coinbase =
             tx.vin.len() == 1 && tx.vin[0].prevout == fluxd_primitives::outpoint::OutPoint::null();
@@ -17962,6 +18010,33 @@ fn tx_to_json(tx: &Transaction, network: Network) -> Result<Value, RpcError> {
         "overwintered": tx.f_overwintered,
         "locktime": tx.lock_time,
     });
+
+    if let Some(fluxnode) = tx.fluxnode.as_ref() {
+        match fluxnode {
+            FluxnodeTx::V5(FluxnodeTxV5::Start(start)) => {
+                entry["nType"] = Value::Number(2.into());
+                entry["collateralOutputHash"] = Value::String(hash256_to_hex(&start.collateral.hash));
+                entry["collateralOutputIndex"] = Value::Number((start.collateral.index as i64).into());
+            }
+            FluxnodeTx::V6(FluxnodeTxV6::Start(start)) => {
+                entry["nType"] = Value::Number(2.into());
+                let collateral = match &start.variant {
+                    FluxnodeStartVariantV6::Normal { collateral, .. } => collateral,
+                    FluxnodeStartVariantV6::P2sh { collateral, .. } => collateral,
+                };
+                entry["collateralOutputHash"] = Value::String(hash256_to_hex(&collateral.hash));
+                entry["collateralOutputIndex"] = Value::Number((collateral.index as i64).into());
+            }
+            FluxnodeTx::V5(FluxnodeTxV5::Confirm(confirm))
+            | FluxnodeTx::V6(FluxnodeTxV6::Confirm(confirm)) => {
+                entry["nType"] = Value::Number(4.into());
+                entry["ip"] = Value::String(confirm.ip.clone());
+                entry["benchmarkTier"] = Value::String(fluxnode_tier_name(confirm.benchmark_tier).to_string());
+                entry["collateralOutputHash"] = Value::String(hash256_to_hex(&confirm.collateral.hash));
+                entry["collateralOutputIndex"] = Value::Number((confirm.collateral.index as i64).into());
+            }
+        }
+    }
 
     if tx.f_overwintered {
         entry["versiongroupid"] = Value::String(format!("{:08x}", tx.version_group_id));
