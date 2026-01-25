@@ -677,6 +677,10 @@ export function registerRoutes(app: Express, env: Env) {
       await refreshDashboardStats(now);
       res.status(200).json(dashboardStatsCache?.value);
     } catch (error) {
+      if (cached) {
+        res.status(200).json(cached.value);
+        return;
+      }
       upstreamUnavailable(res, 'upstream_unavailable', error instanceof Error ? error.message : 'Unknown error');
     }
   });
