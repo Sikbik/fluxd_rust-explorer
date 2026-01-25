@@ -357,10 +357,11 @@ export function registerRoutes(app: Express, env: Env) {
   let homeSnapshotRefresh: Promise<void> | null = null;
 
   async function refreshHomeSnapshot(now: number): Promise<void> {
-    const [blocksLatest, dashboard] = await Promise.all([
-      getLatestBlocks(env, 6),
-      getDashboardStats(env),
-    ]);
+    const blocksLatest = await getLatestBlocks(env, 6);
+    const dashboard = dashboardStatsCache?.value;
+    if (dashboard == null) {
+      kickDashboardStatsRefresh(now);
+    }
 
     const latestBlockFromBlocks = Array.isArray((blocksLatest as any)?.blocks)
       ? (blocksLatest as any).blocks[0]
@@ -387,11 +388,11 @@ export function registerRoutes(app: Express, env: Env) {
     homeSnapshotCache = {
       at: now,
       value: {
-        tipHeight: latestBlockFromBlocks?.height ?? dashboard?.latestBlock?.height ?? 0,
-        tipHash: latestBlockFromBlocks?.hash ?? dashboard?.latestBlock?.hash ?? null,
-        tipTime: latestBlockFromBlocks?.time ?? dashboard?.latestBlock?.timestamp ?? null,
+        tipHeight: latestBlockFromBlocks?.height ?? (dashboard as any)?.latestBlock?.height ?? 0,
+        tipHash: latestBlockFromBlocks?.hash ?? (dashboard as any)?.latestBlock?.hash ?? null,
+        tipTime: latestBlockFromBlocks?.time ?? (dashboard as any)?.latestBlock?.timestamp ?? null,
         latestBlocks,
-        dashboard,
+        dashboard: dashboard ?? null,
       },
     };
   }
@@ -742,16 +743,25 @@ export function registerRoutes(app: Express, env: Env) {
     }
   }
 
+  function kickDashboardStatsRefresh(now: number): void {
+    if (dashboardStatsRefresh) return;
+    dashboardStatsRefresh = refreshDashboardStats(now).finally(() => {
+      dashboardStatsRefresh = null;
+    });
+  }
+
+  setInterval(() => {
+    kickDashboardStatsRefresh(Date.now());
+  }, 2_000);
+
   app.get('/api/v1/stats/dashboard', async (_req: Request, res: Response) => {
     res.setHeader('Cache-Control', 'public, max-age=0, s-maxage=2, stale-while-revalidate=60');
     const now = Date.now();
     const cached = dashboardStatsCache;
 
     if (cached && now - cached.at < 10 * 60_000) {
-      if (now - cached.at >= 2_000 && !dashboardStatsRefresh) {
-        dashboardStatsRefresh = refreshDashboardStats(now).finally(() => {
-          dashboardStatsRefresh = null;
-        });
+      if (now - cached.at >= 2_000) {
+        kickDashboardStatsRefresh(now);
       }
 
       res.status(200).json(cached.value);
