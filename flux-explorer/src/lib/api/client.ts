@@ -13,6 +13,7 @@ import type {
   SyncStatus,
   BlockchainStats,
   DashboardStats,
+  HomeSnapshot,
   AddressTransactionsPage,
 } from "@/types/flux-api";
 
@@ -199,6 +200,10 @@ export class FluxAPI {
   /**
    * Fetch aggregated dashboard stats
    */
+  static async getHomeSnapshot(): Promise<HomeSnapshot> {
+    return FluxIndexerAPI.getHomeSnapshot();
+  }
+
   static async getDashboardStats(): Promise<DashboardStats> {
     return FluxIndexerAPI.getDashboardStats();
   }

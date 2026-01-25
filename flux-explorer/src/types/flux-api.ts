@@ -94,6 +94,14 @@ export interface BlockSummary {
   };
 }
 
+export interface HomeSnapshot {
+  tipHeight: number;
+  tipHash: string | null;
+  tipTime: number | null;
+  latestBlocks: BlockSummary[];
+  dashboard: DashboardStats;
+}
+
 export interface DashboardStats {
   latestBlock: {
     height: number;

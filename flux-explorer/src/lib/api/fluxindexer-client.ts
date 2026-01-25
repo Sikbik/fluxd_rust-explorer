@@ -13,6 +13,7 @@ import type {
   AddressInfo,
   NetworkStatus,
   DashboardStats,
+  HomeSnapshot,
   AddressTransactionSummary,
   AddressTransactionsPage,
 } from "@/types/flux-api";
@@ -938,6 +939,18 @@ export class FluxIndexerAPI {
   /**
    * Fetch aggregated dashboard stats
    */
+  static async getHomeSnapshot(): Promise<HomeSnapshot> {
+    try {
+      return await api().get("api/v1/home").json<HomeSnapshot>();
+    } catch (error) {
+      throw new FluxIndexerAPIError(
+        "Failed to fetch home snapshot",
+        getStatusCode(error),
+        error
+      );
+    }
+  }
+
   static async getDashboardStats(): Promise<DashboardStats> {
     try {
       return await api().get("api/v1/stats/dashboard").json<DashboardStats>();

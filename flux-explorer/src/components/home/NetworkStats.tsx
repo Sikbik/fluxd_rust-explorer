@@ -3,7 +3,7 @@
 import { useFluxNodeCount, useFluxInstancesCount, useArcaneAdoption } from "@/lib/api/hooks/useFluxStats";
 import { useFluxSupply } from "@/lib/api/hooks/useFluxSupply";
 import { useDashboardStats } from "@/lib/api/hooks/useDashboardStats";
-import { useLatestBlocks } from "@/lib/api";
+import { useHomeSnapshot } from "@/lib/api/hooks/useHomeSnapshot";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Activity,
@@ -167,13 +167,13 @@ function TooltipCard({
 export function NetworkStats() {
   const { data: supplyStats, isLoading: supplyLoading } = useFluxSupply();
   const { data: dashboardStats, isLoading: dashboardLoading } = useDashboardStats();
-  const { data: latestBlocks, isLoading: latestBlocksLoading } = useLatestBlocks(1);
+  const { data: homeSnapshot, isLoading: homeLoading } = useHomeSnapshot();
   const { data: nodeCount, isLoading: nodeCountLoading } = useFluxNodeCount();
   const { data: instancesCount, isLoading: instancesCountLoading } = useFluxInstancesCount();
   const { data: arcaneAdoption, isLoading: arcaneLoading } = useArcaneAdoption();
   const avgBlockTime = dashboardStats?.averages.blockTimeSeconds ?? null;
   const tx24h = dashboardStats?.transactions24h ?? null;
-  const latestHeight = latestBlocks?.[0]?.height ?? null;
+  const latestHeight = homeSnapshot?.tipHeight ?? null;
   const blockHeightValue = latestHeight !== null && latestHeight !== undefined
     ? latestHeight.toLocaleString()
     : "—";
@@ -187,7 +187,7 @@ export function NetworkStats() {
         icon={<Database className="h-4 w-4" />}
         accentColor="#38e8ff"
         glowColor="#38e8ff"
-        isLoading={latestBlocksLoading && latestHeight === null}
+        isLoading={homeLoading && latestHeight === null}
         delay={0}
       />
 

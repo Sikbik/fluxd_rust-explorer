@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { useLatestBlocks } from "@/lib/api";
+import { useHomeSnapshot } from "@/lib/api/hooks/useHomeSnapshot";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Blocks, ArrowRight, Server, Clock } from "lucide-react";
@@ -22,7 +22,8 @@ function formatTimeAgo(timestamp: number): string {
 }
 
 export function LatestBlocks() {
-  const { data: blocks, isLoading, error } = useLatestBlocks(6);
+  const { data: homeSnapshot, isLoading, error } = useHomeSnapshot();
+  const blocks = homeSnapshot?.latestBlocks;
   const [, setTick] = useState(0);
 
   // Force re-render every second to update the time display

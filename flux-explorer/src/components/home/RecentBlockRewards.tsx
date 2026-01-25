@@ -4,12 +4,12 @@ import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Pickaxe, Coins, ArrowRight } from "lucide-react";
-import { useDashboardStats } from "@/lib/api/hooks/useDashboardStats";
+import { useHomeSnapshot } from "@/lib/api/hooks/useHomeSnapshot";
 import { getRewardLabel } from "@/lib/block-rewards";
 
 export function RecentBlockRewards() {
-  const { data: dashboardStats, isLoading } = useDashboardStats();
-  const latestReward = dashboardStats?.latestRewards?.[0];
+  const { data: homeSnapshot, isLoading } = useHomeSnapshot();
+  const latestReward = homeSnapshot?.dashboard?.latestRewards?.[0];
 
   const rewards = latestReward
     ? latestReward.outputs
