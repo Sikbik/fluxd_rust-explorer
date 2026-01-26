@@ -21,6 +21,7 @@ primitive-types = "0.14"
 rayon = "1.10"
 sapling-crypto = "0.5"
 sha2 = { version = "0.10", features = ["compress"] }
+smallvec = "1.13"
 zcash_primitives = { version = "0.26", default-features = false, features = ["std"] }
 
 [dev-dependencies]

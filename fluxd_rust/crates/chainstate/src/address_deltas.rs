@@ -116,6 +116,29 @@ impl<S: KeyValueStore> AddressDeltaIndex<S> {
         Ok(out)
     }
 
+    pub fn scan_range(
+        &self,
+        script_hash: &Hash256,
+        start_height: u32,
+        end_height: u32,
+    ) -> Result<Vec<AddressDeltaEntry>, StoreError> {
+        let start_key = address_delta_range_start_key(script_hash, start_height);
+        let end_key = address_delta_range_end_key(script_hash, end_height);
+
+        let entries = self
+            .store
+            .scan_range(Column::AddressDelta, &start_key, &end_key)?;
+
+        let mut out = Vec::with_capacity(entries.len());
+        for (key, value) in entries {
+            let Some(entry) = decode_entry(&key, &value) else {
+                continue;
+            };
+            out.push(entry);
+        }
+        Ok(out)
+    }
+
     pub fn for_each<'a>(
         &self,
         script_pubkey: &[u8],
@@ -133,6 +156,39 @@ impl<S: KeyValueStore> AddressDeltaIndex<S> {
         self.store
             .for_each_prefix(Column::AddressDelta, &prefix, &mut adapter)
     }
+
+    pub fn for_each_range<'a>(
+        &self,
+        script_hash: &Hash256,
+        start_height: u32,
+        end_height: u32,
+        visitor: &mut dyn FnMut(AddressDeltaEntry) -> Result<(), StoreError>,
+    ) -> Result<(), StoreError> {
+        let start_key = address_delta_range_start_key(script_hash, start_height);
+        let end_key = address_delta_range_end_key(script_hash, end_height);
+
+        let mut adapter = |key: &[u8], value: &[u8]| {
+            let Some(entry) = decode_entry(key, value) else {
+                return Ok(());
+            };
+            visitor(entry)
+        };
+
+        self.store
+            .for_each_range(Column::AddressDelta, &start_key, &end_key, &mut adapter)
+    }
+}
+
+pub(crate) fn address_delta_range_start_key(script_hash: &Hash256, start_height: u32) -> [u8; KEY_LEN] {
+    let min_txid: Hash256 = [0u8; 32];
+
+    address_delta_key(script_hash, start_height, 0, &min_txid, 0, false)
+}
+
+pub(crate) fn address_delta_range_end_key(script_hash: &Hash256, end_height: u32) -> [u8; KEY_LEN] {
+    let max_txid: Hash256 = [0xffu8; 32];
+
+    address_delta_key(script_hash, end_height, u32::MAX, &max_txid, u32::MAX, true)
 }
 
 pub(crate) fn address_delta_key(

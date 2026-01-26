@@ -2,6 +2,8 @@ use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use smallvec::SmallVec;
+
 use fluxd_consensus::constants::{
     max_reorg_depth, COINBASE_MATURITY, FLUXNODE_CONFIRM_UPDATE_EXPIRATION_HEIGHT_V1,
     FLUXNODE_CONFIRM_UPDATE_EXPIRATION_HEIGHT_V2, FLUXNODE_CONFIRM_UPDATE_EXPIRATION_HEIGHT_V3,
@@ -34,6 +36,7 @@ use sha2::Sha256;
 
 use crate::address_deltas::AddressDeltaIndex;
 use crate::address_index::AddressIndex;
+use crate::address_tx_index::{AddressTxCursor, AddressTxIndex, DEFAULT_CHECKPOINT_INTERVAL};
 use crate::anchors::{AnchorSet, NullifierSet};
 use crate::blockindex::{BlockIndexEntry, STATUS_HAVE_DATA, STATUS_HAVE_UNDO};
 use crate::filemeta::{
@@ -632,6 +635,7 @@ pub struct ChainState<S> {
     nullifiers_sapling: NullifierSet<Arc<S>>,
     address_index: AddressIndex<Arc<S>>,
     address_deltas: AddressDeltaIndex<Arc<S>>,
+    address_tx_index: AddressTxIndex<Arc<S>>,
     tx_index: TxIndex<Arc<S>>,
     spent_index: SpentIndex<Arc<S>>,
     index: ChainIndex<S>,
@@ -664,6 +668,7 @@ impl<S: KeyValueStore> ChainState<S> {
             nullifiers_sapling: NullifierSet::new(Arc::clone(&store), Column::NullifierSapling),
             address_index: AddressIndex::new(Arc::clone(&store)),
             address_deltas: AddressDeltaIndex::new(Arc::clone(&store)),
+            address_tx_index: AddressTxIndex::new(Arc::clone(&store)),
             tx_index: TxIndex::new(Arc::clone(&store)),
             spent_index: SpentIndex::new(Arc::clone(&store)),
             index: ChainIndex::new(Arc::clone(&store)),
@@ -2387,6 +2392,7 @@ impl<S: KeyValueStore> ChainState<S> {
         );
         let mut created_utxos: HashMap<OutPointKey, CreatedUtxo> =
             HashMap::with_capacity(estimated_outputs);
+        let mut address_tx_events: HashMap<Hash256, SmallVec<[[u8; 77]; 8]>> = HashMap::new();
         let mut spent_outpoints: HashSet<OutPointKey> = HashSet::with_capacity(estimated_inputs);
         let mut block_script_checks: Vec<ScriptCheck> = Vec::new();
         let branch_id = current_epoch_branch_id(height, &consensus.upgrades);
@@ -2626,16 +2632,16 @@ impl<S: KeyValueStore> ChainState<S> {
                             self.update_index_stats(&mut batch, index_stats);
                         }
                         address_delta_inserts = address_delta_inserts.saturating_add(1);
-                        self.address_deltas.insert_with_prefix(
-                            &mut batch,
+                        let delta_key = crate::address_deltas::address_delta_key(
                             key,
                             height as u32,
                             index as u32,
                             &txid,
                             input_index as u32,
                             true,
-                            spent_delta,
                         );
+                        batch.put(Column::AddressDelta, delta_key, spent_delta.to_le_bytes());
+                        address_tx_events.entry(*key).or_default().push(delta_key);
                     }
                     index_time += index_start.elapsed();
                     undo.spent.push(SpentOutput {
@@ -2747,16 +2753,19 @@ impl<S: KeyValueStore> ChainState<S> {
                 let index_start = Instant::now();
                 if let Some(key) = address_key.as_ref() {
                     address_delta_inserts = address_delta_inserts.saturating_add(1);
-                    self.address_deltas.insert_with_prefix(
-                        &mut batch,
+                    let delta_key = crate::address_deltas::address_delta_key(
                         key,
                         height as u32,
                         index as u32,
                         &txid,
                         out_index as u32,
                         false,
-                        output.value,
                     );
+                    batch.put(Column::AddressDelta, delta_key, output.value.to_le_bytes());
+                    address_tx_events
+                        .entry(*key)
+                        .or_default()
+                        .push(delta_key);
                 }
                 index_time += index_start.elapsed();
 
@@ -2780,17 +2789,66 @@ impl<S: KeyValueStore> ChainState<S> {
             utxo_put_ops = utxo_put_ops.saturating_add(1);
             utxo_put_us = utxo_put_us.saturating_add(elapsed.as_micros() as u64);
 
-                if let Some(key) = created.address_key.as_ref() {
-                    let index_start = Instant::now();
-                    address_index_inserts = address_index_inserts.saturating_add(1);
-                    self.address_index
-                        .insert_with_script_hash(&mut batch, key, &created.outpoint);
-                    let mut index_stats = self.index_stats_or_compute()?;
-                    index_stats.address_outpoint_entries = index_stats.address_outpoint_entries.saturating_add(1);
-                    self.update_index_stats(&mut batch, index_stats);
-                    index_time += index_start.elapsed();
-                }
+            if let Some(key) = created.address_key.as_ref() {
+                let index_start = Instant::now();
+                address_index_inserts = address_index_inserts.saturating_add(1);
+                self.address_index
+                    .insert_with_script_hash(&mut batch, key, &created.outpoint);
+                let mut index_stats = self.index_stats_or_compute()?;
+                index_stats.address_outpoint_entries = index_stats.address_outpoint_entries.saturating_add(1);
+                self.update_index_stats(&mut batch, index_stats);
+                index_time += index_start.elapsed();
 
+            }
+        }
+
+        if !address_tx_events.is_empty() {
+            for (script_hash, keys) in address_tx_events.iter_mut() {
+                if keys.is_empty() {
+                    continue;
+                }
+                keys.sort_unstable();
+                keys.dedup();
+
+                let total_prev = self
+                    .address_tx_index
+                    .total(script_hash)?
+                    .unwrap_or(0);
+                let total_next = total_prev.saturating_add(keys.len() as u64);
+                self.address_tx_index
+                    .set_total(&mut batch, script_hash, total_next);
+
+                let checkpoint_interval = DEFAULT_CHECKPOINT_INTERVAL;
+                let prev_checkpoint = total_prev / checkpoint_interval;
+                let next_checkpoint = total_next / checkpoint_interval;
+                if next_checkpoint > prev_checkpoint {
+                    let target_total = next_checkpoint * checkpoint_interval;
+                    let offset_in_block = target_total.saturating_sub(total_prev);
+                    let key = keys
+                        .get(offset_in_block.saturating_sub(1) as usize)
+                        .copied()
+                        .unwrap_or_else(|| keys[keys.len() - 1]);
+
+                    let cursor = AddressTxCursor {
+                        height: u32::from_be_bytes(key[32..36].try_into().map_err(|_| {
+                            ChainStateError::CorruptIndex("invalid address tx cursor height")
+                        })?),
+                        tx_index: u32::from_be_bytes(key[36..40].try_into().map_err(|_| {
+                            ChainStateError::CorruptIndex("invalid address tx cursor tx_index")
+                        })?),
+                        txid: key[40..72].try_into().map_err(|_| {
+                            ChainStateError::CorruptIndex("invalid address tx cursor txid")
+                        })?,
+                    };
+
+                    self.address_tx_index.put_checkpoint(
+                        &mut batch,
+                        script_hash,
+                        next_checkpoint as u32,
+                        &cursor,
+                    );
+                }
+            }
         }
 
         let fluxnode_sig_checks_count = fluxnode_sig_checks.len() as u64;
@@ -3205,6 +3263,8 @@ impl<S: KeyValueStore> ChainState<S> {
         let mut value_removed = 0i64;
         let mut value_restored = 0i64;
 
+        let mut address_tx_events: HashMap<Hash256, SmallVec<[[u8; 77]; 8]>> = HashMap::new();
+
         for tx in &block.transactions {
             for joinsplit in &tx.join_splits {
                 for nullifier in &joinsplit.nullifiers {
@@ -3253,6 +3313,20 @@ impl<S: KeyValueStore> ChainState<S> {
                     output_index as u32,
                     false,
                 );
+                if let Some(script_hash) = crate::address_index::script_hash(&output.script_pubkey) {
+                    let delta_key = crate::address_deltas::address_delta_key(
+                        &script_hash,
+                        height_u32,
+                        tx_index as u32,
+                        &txid,
+                        output_index as u32,
+                        false,
+                    );
+                    address_tx_events
+                        .entry(script_hash)
+                        .or_default()
+                        .push(delta_key);
+                }
                 utxos_removed = utxos_removed
                     .checked_add(1)
                     .ok_or(ChainStateError::ValueOutOfRange)?;
@@ -3288,6 +3362,20 @@ impl<S: KeyValueStore> ChainState<S> {
                         input_index as u32,
                         true,
                     );
+                    if let Some(script_hash) = crate::address_index::script_hash(&spent.entry.script_pubkey) {
+                        let delta_key = crate::address_deltas::address_delta_key(
+                            &script_hash,
+                            height_u32,
+                            tx_index as u32,
+                            &txid,
+                            input_index as u32,
+                            true,
+                        );
+                        address_tx_events
+                            .entry(script_hash)
+                            .or_default()
+                            .push(delta_key);
+                    }
                     self.utxos.put(&mut batch, &spent.outpoint, &spent.entry);
                     self.address_index.insert(
                         &mut batch,
@@ -3415,6 +3503,35 @@ impl<S: KeyValueStore> ChainState<S> {
             ));
         }
         batch.put(Column::Meta, VALUE_POOLS_KEY, value_pools.encode());
+
+        if !address_tx_events.is_empty() {
+            for (script_hash, keys) in address_tx_events.iter_mut() {
+                if keys.is_empty() {
+                    continue;
+                }
+                keys.sort_unstable();
+                keys.dedup();
+
+                let total_prev = self
+                    .address_tx_index
+                    .total(script_hash)?
+                    .unwrap_or(0);
+                let total_next = total_prev.saturating_sub(keys.len() as u64);
+                self.address_tx_index
+                    .set_total(&mut batch, script_hash, total_next);
+
+                let checkpoint_interval = DEFAULT_CHECKPOINT_INTERVAL;
+                let prev_checkpoint = total_prev / checkpoint_interval;
+                let next_checkpoint = total_next / checkpoint_interval;
+                if prev_checkpoint > next_checkpoint {
+                    self.address_tx_index.delete_checkpoint(
+                        &mut batch,
+                        script_hash,
+                        prev_checkpoint as u32,
+                    );
+                }
+            }
+        }
 
         if let Ok(mut cache) = self.header_cache.lock() {
             cache.insert(*hash, entry.clone());
@@ -3989,12 +4106,36 @@ impl<S: KeyValueStore> ChainState<S> {
         Ok(self.store.get(Column::AddressOutpoint, &key)?.is_some())
     }
 
+    pub fn address_tx_total(&self, script_hash: &Hash256) -> Result<Option<u64>, ChainStateError> {
+        Ok(self.address_tx_index.total(script_hash)?)
+    }
+
+    pub fn address_tx_checkpoint(
+        &self,
+        script_hash: &Hash256,
+        checkpoint_index: u32,
+    ) -> Result<Option<AddressTxCursor>, ChainStateError> {
+        Ok(self.address_tx_index.checkpoint(script_hash, checkpoint_index)?)
+    }
+
     pub fn for_each_address_delta(
         &self,
         script_pubkey: &[u8],
         visitor: &mut dyn FnMut(crate::address_deltas::AddressDeltaEntry) -> Result<(), StoreError>,
     ) -> Result<(), ChainStateError> {
         self.address_deltas.for_each(script_pubkey, visitor)?;
+        Ok(())
+    }
+
+    pub fn for_each_address_delta_range(
+        &self,
+        script_hash: &Hash256,
+        start_height: u32,
+        end_height: u32,
+        visitor: &mut dyn FnMut(crate::address_deltas::AddressDeltaEntry) -> Result<(), StoreError>,
+    ) -> Result<(), ChainStateError> {
+        self.address_deltas
+            .for_each_range(script_hash, start_height, end_height, visitor)?;
         Ok(())
     }
 
