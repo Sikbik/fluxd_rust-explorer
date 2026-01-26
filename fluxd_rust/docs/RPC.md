@@ -917,6 +917,14 @@ Returns the transaction ids for one or more transparent addresses.
   - Height range filtering is only applied if both `start` and `end` are provided.
 - Result: array of txid strings, sorted by height.
 
+### getaddresstxidscount
+
+Returns the number of unique transaction ids for one or more transparent addresses.
+
+- Params: either `"taddr"` or `{"addresses":["taddr", ...], "start": n, "end": n}`.
+  - Height range filtering is only applied if both `start` and `end` are provided.
+- Result: number (count of unique txids).
+
 ### getnetworkhashps / getnetworksolps / getlocalsolps
 
 - `getnetworksolps` and `getnetworkhashps` return a chainwork/time-based estimate, modeled after the legacy C++ daemon.

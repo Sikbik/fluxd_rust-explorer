@@ -901,6 +901,31 @@ impl KeyValueStore for Store {
         }
     }
 
+    fn scan_range(
+        &self,
+        column: fluxd_storage::Column,
+        start: &[u8],
+        end: &[u8],
+    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, StoreError> {
+        match self {
+            Store::Memory(store) => store.scan_range(column, start, end),
+            Store::Fjall(store) => store.scan_range(column, start, end),
+        }
+    }
+
+    fn for_each_range<'a>(
+        &self,
+        column: fluxd_storage::Column,
+        start: &[u8],
+        end: &[u8],
+        visitor: &mut fluxd_storage::PrefixVisitor<'a>,
+    ) -> Result<(), StoreError> {
+        match self {
+            Store::Memory(store) => store.for_each_range(column, start, end, visitor),
+            Store::Fjall(store) => store.for_each_range(column, start, end, visitor),
+        }
+    }
+
     fn write_batch(&self, batch: &WriteBatch) -> Result<(), StoreError> {
         match self {
             Store::Memory(store) => store.write_batch(batch),

@@ -384,6 +384,7 @@ const RPC_METHODS: &[&str] = &[
     "getaddressbalance",
     "getaddressdeltas",
     "getaddresstxids",
+    "getaddresspagecursor",
     "getaddressmempool",
     "getmininginfo",
     "getblocktemplate",
@@ -1649,6 +1650,8 @@ fn dispatch_method<S: fluxd_storage::KeyValueStore + 'static>(
         "getaddressbalance" => rpc_getaddressbalance(chainstate, params, chain_params),
         "getaddressdeltas" => rpc_getaddressdeltas(chainstate, params, chain_params),
         "getaddresstxids" => rpc_getaddresstxids(chainstate, params, chain_params),
+        "getaddresstxidscount" => rpc_getaddresstxidscount(chainstate, params, chain_params),
+        "getaddresspagecursor" => rpc_getaddresspagecursor(chainstate, params, chain_params),
         "getaddressmempool" => rpc_getaddressmempool(chainstate, mempool, params, chain_params),
         "getmininginfo" => {
             rpc_getmininginfo(chainstate, mempool, params, chain_params, header_metrics)
@@ -12281,9 +12284,8 @@ fn rpc_getrichlist<S: fluxd_storage::KeyValueStore>(
         )
         .is_ok()
     {
-        match refresh_richlist_cache(chainstate, chain_params) {
-            Ok(()) => {}
-            Err(_) => {}
+        if let Err(err) = refresh_richlist_cache(chainstate, chain_params) {
+            log_warn!("richlist refresh failed: {err}");
         }
         RICHLIST_REFRESH_IN_FLIGHT.store(false, std::sync::atomic::Ordering::SeqCst);
     }
@@ -12711,15 +12713,11 @@ fn rpc_getaddressdeltas<S: fluxd_storage::KeyValueStore>(
 
     let mut rows = Vec::new();
     for (address, script_pubkey) in address_scripts {
-        let deltas = chainstate
-            .address_deltas(&script_pubkey)
-            .map_err(map_internal)?;
-        for delta in deltas {
-            if let Some((start, end)) = range {
-                if delta.height < start || delta.height > end {
-                    continue;
-                }
-            }
+        let Some(script_hash) = fluxd_chainstate::address_index::script_hash(&script_pubkey) else {
+            continue;
+        };
+
+        let mut visitor = |delta: fluxd_chainstate::address_deltas::AddressDeltaEntry| {
             rows.push(DeltaRow {
                 address: address.clone(),
                 height: delta.height,
@@ -12728,6 +12726,17 @@ fn rpc_getaddressdeltas<S: fluxd_storage::KeyValueStore>(
                 index: delta.index,
                 satoshis: delta.satoshis,
             });
+            Ok(())
+        };
+
+        if let Some((start, end)) = range {
+            chainstate
+                .for_each_address_delta_range(&script_hash, start, end, &mut visitor)
+                .map_err(map_internal)?;
+        } else {
+            chainstate
+                .for_each_address_delta(&script_pubkey, &mut visitor)
+                .map_err(map_internal)?;
         }
     }
 
@@ -12812,16 +12821,23 @@ fn rpc_getaddresstxids<S: fluxd_storage::KeyValueStore>(
 
     let mut txids = std::collections::BTreeSet::<(u32, Hash256)>::new();
     for (_address, script_pubkey) in address_scripts {
-        let deltas = chainstate
-            .address_deltas(&script_pubkey)
-            .map_err(map_internal)?;
-        for delta in deltas {
-            if let Some((start, end)) = range {
-                if delta.height < start || delta.height > end {
-                    continue;
-                }
-            }
+        let Some(script_hash) = fluxd_chainstate::address_index::script_hash(&script_pubkey) else {
+            continue;
+        };
+
+        let mut visitor = |delta: fluxd_chainstate::address_deltas::AddressDeltaEntry| {
             txids.insert((delta.height, delta.txid));
+            Ok(())
+        };
+
+        if let Some((start, end)) = range {
+            chainstate
+                .for_each_address_delta_range(&script_hash, start, end, &mut visitor)
+                .map_err(map_internal)?;
+        } else {
+            chainstate
+                .for_each_address_delta(&script_pubkey, &mut visitor)
+                .map_err(map_internal)?;
         }
     }
 
@@ -12831,6 +12847,149 @@ fn rpc_getaddresstxids<S: fluxd_storage::KeyValueStore>(
             .map(|(_height, txid)| Value::String(hash256_to_hex(&txid)))
             .collect(),
     ))
+}
+
+fn rpc_getaddresstxidscount<S: fluxd_storage::KeyValueStore>(
+    chainstate: &ChainState<S>,
+    params: Vec<Value>,
+    chain_params: &ChainParams,
+) -> Result<Value, RpcError> {
+    if params.len() != 1 {
+        return Err(RpcError::new(
+            RPC_INVALID_PARAMETER,
+            "getaddresstxidscount expects 1 parameter",
+        ));
+    }
+
+    let (addresses, opts) = parse_addresses_param(&params[0])?;
+    let range = parse_height_range(chainstate, opts)?;
+    let address_scripts = decode_address_scripts(addresses, chain_params.network)?;
+
+    let mut txids = std::collections::BTreeSet::<(u32, Hash256)>::new();
+    for (_address, script_pubkey) in address_scripts {
+        let Some(script_hash) = fluxd_chainstate::address_index::script_hash(&script_pubkey) else {
+            continue;
+        };
+
+        let mut visitor = |delta: fluxd_chainstate::address_deltas::AddressDeltaEntry| {
+            txids.insert((delta.height, delta.txid));
+            Ok(())
+        };
+
+        if let Some((start, end)) = range {
+            chainstate
+                .for_each_address_delta_range(&script_hash, start, end, &mut visitor)
+                .map_err(map_internal)?;
+        } else {
+            chainstate
+                .for_each_address_delta(&script_pubkey, &mut visitor)
+                .map_err(map_internal)?;
+        }
+    }
+
+    Ok(Value::Number((txids.len() as u64).into()))
+}
+
+fn rpc_getaddresspagecursor<S: fluxd_storage::KeyValueStore>(
+    chainstate: &ChainState<S>,
+    params: Vec<Value>,
+    chain_params: &ChainParams,
+) -> Result<Value, RpcError> {
+    if params.len() != 1 {
+        return Err(RpcError::new(
+            RPC_INVALID_PARAMETER,
+            "getaddresspagecursor expects 1 parameter",
+        ));
+    }
+
+    let (addresses, opts) = parse_addresses_param(&params[0])?;
+    let address_scripts = decode_address_scripts(addresses, chain_params.network)?;
+
+    if address_scripts.len() != 1 {
+        return Err(RpcError::new(
+            RPC_INVALID_PARAMETER,
+            "getaddresspagecursor expects exactly one address",
+        ));
+    }
+
+    let map = opts.ok_or_else(|| {
+        RpcError::new(
+            RPC_INVALID_PARAMETER,
+            "getaddresspagecursor expects an object parameter",
+        )
+    })?;
+
+    let offset = map
+        .get("offset")
+        .map(|value| parse_u32(value, "offset"))
+        .transpose()?
+        .unwrap_or(0) as u64;
+    let limit = map
+        .get("limit")
+        .map(|value| parse_u32(value, "limit"))
+        .transpose()?
+        .unwrap_or(25) as u64;
+    let limit = limit.max(1);
+
+    let (address, script_pubkey) = address_scripts
+        .into_iter()
+        .next()
+        .expect("single address");
+
+    let Some(script_hash) = fluxd_chainstate::address_index::script_hash(&script_pubkey) else {
+        return Ok(json!({
+            "total": 0,
+            "cursorHeight": null,
+            "cursorTxIndex": null,
+            "cursorTxid": null,
+        }));
+    };
+
+    let total = chainstate
+        .address_tx_total(&script_hash)
+        .map_err(map_internal)?
+        .unwrap_or(0);
+
+    if total == 0 {
+        return Ok(json!({
+            "address": address,
+            "total": 0,
+            "cursorHeight": null,
+            "cursorTxIndex": null,
+            "cursorTxid": null,
+        }));
+    }
+
+    let page_size = limit;
+    let offset_from_newest = offset;
+
+    let start_rank_from_oldest = total
+        .saturating_sub(offset_from_newest)
+        .saturating_sub(page_size);
+
+    let checkpoint_interval = fluxd_chainstate::address_tx_index::DEFAULT_CHECKPOINT_INTERVAL;
+    let checkpoint_index = start_rank_from_oldest / checkpoint_interval;
+
+    let cursor = chainstate
+        .address_tx_checkpoint(&script_hash, checkpoint_index as u32)
+        .map_err(map_internal)?;
+
+    Ok(match cursor {
+        Some(cursor) => json!({
+            "address": address,
+            "total": total,
+            "cursorHeight": cursor.height,
+            "cursorTxIndex": cursor.tx_index,
+            "cursorTxid": hash256_to_hex(&cursor.txid),
+        }),
+        None => json!({
+            "address": address,
+            "total": total,
+            "cursorHeight": null,
+            "cursorTxIndex": null,
+            "cursorTxid": null,
+        }),
+    })
 }
 
 fn rpc_getaddressmempool<S: fluxd_storage::KeyValueStore>(
