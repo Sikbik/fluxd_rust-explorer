@@ -67,17 +67,17 @@ export function AddressTransactions({
     }
   };
 
-  const { data: txPage, isLoading, refetch } = useAddressTransactions(
-    [addressInfo.addrStr],
-    currentCursor
-      ? { cursorHeight: currentCursor.height, cursorTxIndex: currentCursor.txIndex, cursorTxid: currentCursor.txid, to: ITEMS_PER_PAGE }
-      : { from, to },
-    {
-      staleTime: 0,
-      placeholderData: keepPreviousData,
-      refetchOnWindowFocus: false,
-    }
-  );
+   const { data: txPage, isLoading, isPlaceholderData, refetch } = useAddressTransactions(
+     [addressInfo.addrStr],
+     currentCursor
+       ? { cursorHeight: currentCursor.height, cursorTxIndex: currentCursor.txIndex, cursorTxid: currentCursor.txid, to: ITEMS_PER_PAGE }
+       : { from, to },
+     {
+       staleTime: 0,
+       placeholderData: keepPreviousData,
+       refetchOnWindowFocus: false,
+     }
+   );
 
   useEffect(() => {
     if (pollingToken === undefined) return;
@@ -96,18 +96,18 @@ export function AddressTransactions({
   }, [pollingToken, pollingActive, pollingInterval, refetch]);
 
   // Update cursor stack when we receive new data with nextCursor
-  useEffect(() => {
-    if (txPage?.nextCursor) {
-      setCursorStack((prev) => {
-        const newStack = [...prev];
-        // Store the cursor for the next page
-        if (newStack.length === currentPage) {
-          newStack.push(txPage.nextCursor || null);
-        }
-        return newStack;
-      });
-    }
-  }, [txPage, currentPage]);
+   useEffect(() => {
+     if (txPage?.nextCursor && !isPlaceholderData) {
+       setCursorStack((prev) => {
+         const newStack = [...prev];
+         // Store the cursor for the next page
+         if (newStack.length === currentPage) {
+           newStack.push(txPage.nextCursor || null);
+         }
+         return newStack;
+       });
+     }
+   }, [txPage, currentPage, isPlaceholderData]);
 
   const transactions = txPage?.items ?? [];
   const totalItems = txPage?.filteredTotal ?? txPage?.totalItems ?? addressInfo.txApperances ?? 0;

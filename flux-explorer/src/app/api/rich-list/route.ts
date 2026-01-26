@@ -200,15 +200,24 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     console.error("Failed to fetch rich list:", error);
 
-    const message =
-      error instanceof Error ? error.message : "Unable to retrieve rich list data.";
+    void error;
 
     return NextResponse.json(
       {
-        error: "Failed to fetch rich list",
-        message,
+        lastUpdate: new Date().toISOString(),
+        lastBlockHeight: 0,
+        totalSupply: 0,
+        transparentSupply: 0,
+        shieldedPool: 0,
+        totalAddresses: 0,
+        addresses: [],
       },
-      { status: 500 }
+      {
+        status: 200,
+        headers: {
+          "Cache-Control": `public, s-maxage=${CACHE_DURATION}, stale-while-revalidate=${CACHE_DURATION * 2}`,
+        },
+      }
     );
   }
 }
