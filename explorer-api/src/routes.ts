@@ -601,119 +601,41 @@ export function registerRoutes(app: Express, env: Env) {
     }
   });
 
-  app.get('/api/v1/addresses/:address/transactions', async (req: Request, res: Response) => {
-    try {
-      const address = req.params.address;
+   app.get('/api/v1/addresses/:address/transactions', async (req: Request, res: Response) => {
+     try {
+       const address = req.params.address;
 
-      const limit = clampInt(toInt(req.query.limit) ?? 25, 1, 100);
-      const offsetRaw = toInt(req.query.offset);
-      const offset = offsetRaw != null ? Math.max(0, offsetRaw) : undefined;
+       const limit = clampInt(toInt(req.query.limit) ?? 25, 1, 100);
+       const offsetRaw = toInt(req.query.offset);
+       const offset = offsetRaw != null ? Math.max(0, offsetRaw) : undefined;
 
-      const cursorHeight = toInt(req.query.cursorHeight) ?? undefined;
-      const cursorTxIndex = toInt(req.query.cursorTxIndex) ?? undefined;
-      const cursorTxid = req.query.cursorTxid != null ? String(req.query.cursorTxid) : undefined;
+       const cursorHeight = toInt(req.query.cursorHeight) ?? undefined;
+       const cursorTxIndex = toInt(req.query.cursorTxIndex) ?? undefined;
+       const cursorTxid = req.query.cursorTxid != null ? String(req.query.cursorTxid) : undefined;
 
-      const fromBlock = toInt(req.query.fromBlock) ?? undefined;
-      const toBlock = toInt(req.query.toBlock) ?? undefined;
-      const fromTimestamp = toInt(req.query.fromTimestamp) ?? undefined;
-      const toTimestamp = toInt(req.query.toTimestamp) ?? undefined;
+       const fromBlock = toInt(req.query.fromBlock) ?? undefined;
+       const toBlock = toInt(req.query.toBlock) ?? undefined;
+       const fromTimestamp = toInt(req.query.fromTimestamp) ?? undefined;
+       const toTimestamp = toInt(req.query.toTimestamp) ?? undefined;
 
-      const fullMode = String(req.query.full ?? '').toLowerCase();
-      if (fullMode === '1' || fullMode === 'true' || fullMode === 'yes') {
-        const response = await getAddressTransactions(env, address, {
-          limit,
-          offset,
-          cursorHeight,
-          cursorTxIndex,
-          cursorTxid,
-          fromBlock,
-          toBlock,
-          fromTimestamp,
-          toTimestamp,
-        });
+       // Always use getAddressTransactions for correct satoshi values
+       const response = await getAddressTransactions(env, address, {
+         limit,
+         offset,
+         cursorHeight,
+         cursorTxIndex,
+         cursorTxid,
+         fromBlock,
+         toBlock,
+         fromTimestamp,
+         toTimestamp,
+       });
 
-        res.status(200).json(response);
-        return;
-      }
-
-      const txids = await fluxdGet<string[]>(env, 'getaddresstxids', {
-        params: JSON.stringify([{ addresses: [address] }]),
-      });
-
-      const ids = Array.isArray(txids) ? txids : [];
-
-      const startIndex = cursorTxid ? Math.max(0, ids.indexOf(cursorTxid) + 1) : (offset ?? 0);
-      const end = Math.max(0, ids.length - startIndex);
-      const begin = Math.max(0, end - limit);
-      const pageIds = ids.slice(begin, end).reverse();
-
-      const bestHeight = await fluxdGet<number>(env, 'getblockcount', { params: JSON.stringify([]) });
-
-      const transactions = await Promise.all(
-        pageIds.map(async (txid) => {
-          try {
-            const tx = await getTransaction(env, txid, false);
-            return {
-              txid,
-              blockHeight: tx.blockHeight ?? 0,
-              timestamp: tx.time ?? tx.blockTime ?? 0,
-              blockHash: tx.blockHash,
-              confirmations: tx.confirmations ?? (tx.blockHeight != null ? Math.max(0, bestHeight - tx.blockHeight + 1) : 0),
-              direction: 'received',
-              value: '0',
-              receivedValue: '0',
-              sentValue: '0',
-              fromAddresses: [],
-              fromAddressCount: 0,
-              toAddresses: [],
-              toAddressCount: 0,
-              selfTransfer: false,
-              feeValue: '0',
-              changeValue: '0',
-              toOthersValue: '0',
-              isCoinbase: false,
-            };
-          } catch {
-            return {
-              txid,
-              blockHeight: 0,
-              timestamp: 0,
-              confirmations: 0,
-              direction: 'received',
-              value: '0',
-              receivedValue: '0',
-              sentValue: '0',
-              fromAddresses: [],
-              fromAddressCount: 0,
-              toAddresses: [],
-              toAddressCount: 0,
-              selfTransfer: false,
-              feeValue: '0',
-              changeValue: '0',
-              toOthersValue: '0',
-              isCoinbase: false,
-            };
-          }
-        })
-      );
-
-      const nextCursor = begin > 0
-        ? { height: 0, txIndex: 0, txid: ids[begin - 1] }
-        : undefined;
-
-      res.status(200).json({
-        address,
-        transactions,
-        total: ids.length,
-        filteredTotal: ids.length,
-        limit,
-        offset,
-        nextCursor,
-      });
-    } catch (error) {
-      upstreamUnavailable(res, 'upstream_unavailable', error instanceof Error ? error.message : 'Unknown error');
-    }
-  });
+       res.status(200).json(response);
+     } catch (error) {
+       upstreamUnavailable(res, 'upstream_unavailable', error instanceof Error ? error.message : 'Unknown error');
+     }
+   });
 
   app.get('/api/v1/sync', async (_req: Request, res: Response) => {
     try {
@@ -879,15 +801,25 @@ export function registerRoutes(app: Express, env: Env) {
        res.status(200).json(richListCache.get(key)?.value);
      } catch (error) {
        const message = error instanceof Error ? error.message : 'Unknown error';
-        if (message.includes('rich list warming up')) {
-          const cachedResponse = richListCache.get(key)?.value;
-          if (cachedResponse) {
-            res.status(200).json(cachedResponse);
-            return;
-          }
-          res.status(502).json({ error: 'upstream_unavailable', message });
-          return;
-        }
+         if (message.includes('rich list warming up')) {
+           const cachedResponse = richListCache.get(key)?.value;
+           if (cachedResponse) {
+             res.status(200).json(cachedResponse);
+             return;
+           }
+
+           res.status(200).json({
+             lastUpdate: new Date().toISOString(),
+             lastBlockHeight: 0,
+             totalSupply: '0',
+             totalAddresses: 0,
+             page,
+             pageSize,
+             totalPages: 0,
+             addresses: [],
+           });
+           return;
+         }
        upstreamUnavailable(res, 'upstream_unavailable', message);
      }
   });

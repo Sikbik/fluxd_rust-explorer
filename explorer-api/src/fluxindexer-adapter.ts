@@ -42,6 +42,36 @@ function toSatoshiString(value: unknown): string {
   return toSatoshiBigInt(value).toString();
 }
 
+function amountToSatoshiBigInt(value: unknown): bigint {
+
+  if (typeof value === 'bigint') return value;
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return BigInt(Math.round(value * 1e8));
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (trimmed.length === 0) return 0n;
+
+    const negative = trimmed.startsWith('-');
+    const abs = negative ? trimmed.slice(1) : trimmed;
+
+    if (abs.includes('.')) {
+      const [wholeRaw, fracRaw = ''] = abs.split('.', 2);
+      const whole = wholeRaw.length > 0 ? BigInt(wholeRaw) : 0n;
+      const fracPadded = (fracRaw + '00000000').slice(0, 8);
+      const frac = BigInt(fracPadded);
+      const sat = whole * 100000000n + frac;
+      return negative ? -sat : sat;
+    }
+
+    return toSatoshiBigInt(trimmed);
+  }
+
+  return toSatoshiBigInt(value);
+}
+
 export interface FluxIndexerBlockResponse {
   hash: string;
   size?: number;
@@ -119,6 +149,38 @@ export interface FluxIndexerTransactionResponse {
   hex?: string;
 }
 
+type CachedTipHeight = { atMs: number; height: number };
+
+let cachedTipHeight: CachedTipHeight | null = null;
+let tipHeightInFlight: Promise<number> | null = null;
+const TIP_HEIGHT_CACHE_TTL_MS = 5_000;
+
+async function getTipHeightCached(env: Env): Promise<number> {
+  const nowMs = Date.now();
+  const cached = cachedTipHeight;
+  if (cached && nowMs - cached.atMs <= TIP_HEIGHT_CACHE_TTL_MS) {
+    return cached.height;
+  }
+
+  if (tipHeightInFlight) {
+    return tipHeightInFlight;
+  }
+
+  const request = (async (): Promise<number> => {
+    try {
+      const height = await fluxdGet<number>(env, 'getblockcount', { params: JSON.stringify([]) });
+      const normalized = typeof height === 'number' && Number.isFinite(height) ? Math.max(0, Math.trunc(height)) : 0;
+      cachedTipHeight = { atMs: Date.now(), height: normalized };
+      return normalized;
+    } finally {
+      tipHeightInFlight = null;
+    }
+  })();
+
+  tipHeightInFlight = request;
+  return request;
+}
+
 export async function fluxdGet<T>(
   env: Env,
   method: string,
@@ -142,30 +204,50 @@ export async function fluxdGet<T>(
     : '';
 
   const url = `${env.fluxdRpcUrl}/daemon/${method}${search}`;
-  const response = await fetch(url, {
-    headers,
-    signal: AbortSignal.timeout(timeoutMs),
-    keepalive: false,
-  });
-  if (!response.ok) {
-    const text = await response.text().catch(() => '');
-    throw new Error(`fluxd_rust /daemon/${method} failed: ${response.status} ${response.statusText}${text ? `: ${text}` : ''}`);
-  }
 
-  const json = (await response.json()) as any;
-  if (json && typeof json === 'object' && 'error' in json && json.error) {
-    const message = typeof json.error?.message === 'string'
-      ? json.error.message
-      : typeof json.error === 'string'
-        ? json.error
-        : 'RPC error';
-    throw new Error(message);
-  }
+  let attempt = 0;
+  const maxAttempts = method === 'getblockdeltas' ? 2 : 1;
 
-  if (json && typeof json === 'object' && 'result' in json) {
-    return json.result as T;
+  while (true) {
+    attempt += 1;
+
+    try {
+      const response = await fetch(url, {
+        headers,
+        signal: AbortSignal.timeout(timeoutMs),
+        keepalive: false,
+      });
+
+      if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        throw new Error(
+          `fluxd_rust /daemon/${method} failed: ${response.status} ${response.statusText}${text ? `: ${text}` : ''}`
+        );
+      }
+
+      const json = (await response.json()) as any;
+      if (json && typeof json === 'object' && 'error' in json && json.error) {
+        const message = typeof json.error?.message === 'string'
+          ? json.error.message
+          : typeof json.error === 'string'
+            ? json.error
+            : 'RPC error';
+        throw new Error(message);
+      }
+
+      if (json && typeof json === 'object' && 'result' in json) {
+        return json.result as T;
+      }
+      return json as T;
+    } catch (err) {
+      if (attempt >= maxAttempts) {
+        throw err instanceof Error ? err : new Error('fluxd_rust request failed');
+      }
+
+      const backoffMs = attempt * 150;
+      await new Promise((resolve) => setTimeout(resolve, backoffMs));
+    }
   }
-  return json as T;
 }
 
 async function fluxdGetWithOptions<T>(
@@ -201,30 +283,50 @@ async function fluxdGetWithOptions<T>(
   const search = Object.keys(query).length > 0 ? `?${new URLSearchParams(query).toString()}` : '';
 
   const url = `${env.fluxdRpcUrl}/daemon/${method}${search}`;
-  const response = await fetch(url, {
-    headers,
-    signal: AbortSignal.timeout(timeoutMs),
-    keepalive: false,
-  });
-  if (!response.ok) {
-    const text = await response.text().catch(() => '');
-    throw new Error(`fluxd_rust /daemon/${method} failed: ${response.status} ${response.statusText}${text ? `: ${text}` : ''}`);
-  }
 
-  const json = (await response.json()) as any;
-  if (json && typeof json === 'object' && 'error' in json && json.error) {
-    const message = typeof json.error?.message === 'string'
-      ? json.error.message
-      : typeof json.error === 'string'
-        ? json.error
-        : 'RPC error';
-    throw new Error(message);
-  }
+  let attempt = 0;
+  const maxAttempts = method === 'getblockdeltas' ? 2 : 1;
 
-  if (json && typeof json === 'object' && 'result' in json) {
-    return json.result as T;
+  while (true) {
+    attempt += 1;
+
+    try {
+      const response = await fetch(url, {
+        headers,
+        signal: AbortSignal.timeout(timeoutMs),
+        keepalive: false,
+      });
+
+      if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        throw new Error(
+          `fluxd_rust /daemon/${method} failed: ${response.status} ${response.statusText}${text ? `: ${text}` : ''}`
+        );
+      }
+
+      const json = (await response.json()) as any;
+      if (json && typeof json === 'object' && 'error' in json && json.error) {
+        const message = typeof json.error?.message === 'string'
+          ? json.error.message
+          : typeof json.error === 'string'
+            ? json.error
+            : 'RPC error';
+        throw new Error(message);
+      }
+
+      if (json && typeof json === 'object' && 'result' in json) {
+        return json.result as T;
+      }
+      return json as T;
+    } catch (err) {
+      if (attempt >= maxAttempts) {
+        throw err instanceof Error ? err : new Error('fluxd_rust request failed');
+      }
+
+      const backoffMs = attempt * 150;
+      await new Promise((resolve) => setTimeout(resolve, backoffMs));
+    }
   }
-  return json as T;
 }
 
 type BlockDeltaTx = {
@@ -590,8 +692,15 @@ export async function getBlockByHash(env: Env, hash: string): Promise<FluxIndexe
 
     const isCoinbase = inputs.length === 0 && fluxnodeType == null;
 
-    const vinSat = inputs.reduce((acc: bigint, row) => acc + toSatoshiBigInt(row?.satoshis ?? 0), 0n);
-    const voutSat = outputs.reduce((acc: bigint, row) => acc + toSatoshiBigInt(row?.satoshis ?? 0), 0n);
+    const vinSat = inputs.reduce((acc: bigint, row) => {
+      const sat = toNumber(row?.satoshis, 0);
+      return acc + BigInt(Math.max(0, Math.trunc(-sat)));
+    }, 0n);
+
+    const voutSat = outputs.reduce((acc: bigint, row) => {
+      const sat = toNumber(row?.satoshis, 0);
+      return acc + BigInt(Math.max(0, Math.trunc(sat)));
+    }, 0n);
 
     const feeSat = !isCoinbase && vinSat > voutSat ? (vinSat - voutSat) : 0n;
 
@@ -744,12 +853,64 @@ export async function getTransaction(env: Env, txid: string, includeHex: boolean
   const verbose = 1;
   const tx = await fluxdGet<any>(env, 'getrawtransaction', { params: JSON.stringify([txid, verbose]) });
 
+  const rawVin = Array.isArray(tx.vin) ? tx.vin : [];
+  const rawVout = Array.isArray(tx.vout) ? tx.vout : [];
+
+  let vin = rawVin.map((input: any) => {
+    if (input?.coinbase != null) return input;
+
+    const sat = amountToSatoshiBigInt(input?.valueSat ?? input?.value ?? 0);
+    return {
+      ...input,
+      value: sat.toString(),
+      valueSat: Number(sat),
+    };
+  });
+
+  const vout = rawVout.map((output: any) => {
+    const sat = amountToSatoshiBigInt(output?.valueSat ?? output?.value ?? 0);
+    return {
+      ...output,
+      value: sat.toString(),
+      valueSat: Number(sat),
+    };
+  });
+
+  if (typeof tx.blockhash === 'string' && tx.blockhash.length === 64) {
+    try {
+      const deltasResp = await fluxdGet<BlockDeltasResponse>(env, 'getblockdeltas', { params: JSON.stringify([tx.blockhash]) }, 10_000);
+      const txDeltas = Array.isArray(deltasResp?.deltas) ? deltasResp.deltas : [];
+      const deltaTx = txDeltas.find((d) => d?.txid === txid);
+      const deltaInputs = Array.isArray(deltaTx?.inputs) ? deltaTx?.inputs : [];
+
+      if (deltaInputs.length > 0) {
+        vin = vin.map((input: any, idx: number) => {
+          if (input?.coinbase != null) return input;
+          const deltaSat = toNumber(deltaInputs[idx]?.satoshis, 0);
+          const sat = BigInt(Math.max(0, Math.trunc(-deltaSat)));
+          return {
+            ...input,
+            value: sat.toString(),
+            valueSat: Number(sat),
+          };
+        });
+      }
+    } catch {
+    }
+  }
+
+  const vinSat = vin.reduce((acc: bigint, input: any) => acc + toSatoshiBigInt(input?.value ?? 0), 0n);
+  const voutSat = vout.reduce((acc: bigint, output: any) => acc + toSatoshiBigInt(output?.value ?? 0), 0n);
+
+  const isCoinbase = vin.length === 0;
+  const feeSat = isCoinbase ? 0n : (vinSat > voutSat ? (vinSat - voutSat) : 0n);
+
   return {
     txid: toString(tx.txid, txid),
     version: toNumber(tx.version),
     lockTime: toNumber(tx.locktime),
-    vin: tx.vin,
-    vout: tx.vout,
+    vin,
+    vout,
     blockHash: toString(tx.blockhash),
     blockHeight: toNumber(tx.height),
     confirmations: toNumber(tx.confirmations),
@@ -757,6 +918,9 @@ export async function getTransaction(env: Env, txid: string, includeHex: boolean
     time: toNumber(tx.time),
     size: toNumber(tx.size),
     vsize: toNumber(tx.vsize ?? tx.size),
+    value: toSatoshiString(voutSat),
+    valueIn: toSatoshiString(vinSat),
+    fees: toSatoshiString(feeSat),
     nType: toOptionalNumber(tx.nType),
     benchmarkTier: typeof tx.benchmarkTier === 'string' ? tx.benchmarkTier : null,
     ip: typeof tx.ip === 'string' ? tx.ip : null,
@@ -767,9 +931,14 @@ export async function getTransaction(env: Env, txid: string, includeHex: boolean
 }
 
 export async function getAddressSummary(env: Env, address: string): Promise<{ address: string; balance: string; totalReceived: string; totalSent: string; unconfirmedBalance: string; unconfirmedTxs: number; txs: number; transactions: Array<{ txid: string }> }> {
-  const [balance, txids, mempoolDeltas] = await Promise.all([
+  const bestHeight = await getTipHeightCached(env);
+  const previewWindowBlocks = 2_000;
+  const previewRange = { start: Math.max(1, bestHeight - previewWindowBlocks), end: bestHeight };
+
+  const [balance, txCount, txids, mempoolDeltas] = await Promise.all([
     fluxdGet<any>(env, 'getaddressbalance', { params: JSON.stringify([{ addresses: [address] }]) }),
-    fluxdGet<string[]>(env, 'getaddresstxids', { params: JSON.stringify([{ addresses: [address] }]) }),
+    fluxdGet<number>(env, 'getaddresstxidscount', { params: JSON.stringify([{ addresses: [address] }]) }),
+    fluxdGet<string[]>(env, 'getaddresstxids', { params: JSON.stringify([{ addresses: [address], ...previewRange }]) }),
     fluxdGet<any[]>(env, 'getaddressmempool', { params: JSON.stringify([{ addresses: [address] }]) }),
   ]);
 
@@ -788,7 +957,7 @@ export async function getAddressSummary(env: Env, address: string): Promise<{ ad
     totalSent: satSent.toString(),
     unconfirmedBalance: unconfirmedBalance.toString(),
     unconfirmedTxs,
-    txs: Array.isArray(txids) ? txids.length : 0,
+    txs: typeof txCount === 'number' && Number.isFinite(txCount) ? Math.max(0, Math.trunc(txCount)) : (Array.isArray(txids) ? txids.length : 0),
     transactions: Array.isArray(txids) ? txids.slice(-25).reverse().map((id) => ({ txid: toString(id) })) : [],
   };
 }
@@ -856,6 +1025,131 @@ type AddressTxIoSummary = {
   isCoinbase: boolean;
 };
 
+type CachedBlockHeader = { atMs: number; hash: string; timestamp: number };
+
+const BLOCK_HEADER_CACHE_TTL_MS = 15 * 60_000;
+const blockHeaderCacheByHeight = new Map<number, CachedBlockHeader>();
+const blockHeaderInFlight = new Map<number, Promise<{ hash: string; timestamp: number }>>();
+let lastBlockHeaderCacheSweepMs = 0;
+
+function sweepBlockHeaderCache(nowMs: number): void {
+  if (nowMs - lastBlockHeaderCacheSweepMs < 60_000) return;
+  lastBlockHeaderCacheSweepMs = nowMs;
+
+  for (const [height, entry] of blockHeaderCacheByHeight) {
+    if (nowMs - entry.atMs > BLOCK_HEADER_CACHE_TTL_MS) {
+      blockHeaderCacheByHeight.delete(height);
+    }
+  }
+}
+
+async function getBlockHeaderByHeightCached(env: Env, height: number): Promise<{ hash: string; timestamp: number }> {
+  const nowMs = Date.now();
+  sweepBlockHeaderCache(nowMs);
+
+  const cached = blockHeaderCacheByHeight.get(height);
+  if (cached && nowMs - cached.atMs <= BLOCK_HEADER_CACHE_TTL_MS) {
+    return { hash: cached.hash, timestamp: cached.timestamp };
+  }
+
+  const inFlight = blockHeaderInFlight.get(height);
+  if (inFlight) {
+    return inFlight;
+  }
+
+  const request = (async (): Promise<{ hash: string; timestamp: number }> => {
+    try {
+      const hash = await fluxdGet<string>(env, 'getblockhash', { params: JSON.stringify([height]) });
+      const header = await fluxdGet<any>(env, 'getblockheader', { params: JSON.stringify([hash]) });
+
+      const entry: CachedBlockHeader = { atMs: Date.now(), hash, timestamp: toNumber(header.time, 0) };
+      blockHeaderCacheByHeight.set(height, entry);
+
+      return { hash: entry.hash, timestamp: entry.timestamp };
+    } finally {
+      blockHeaderInFlight.delete(height);
+    }
+  })();
+
+  blockHeaderInFlight.set(height, request);
+  return request;
+}
+
+type CachedGroupedAddressTxs = { atMs: number; groupedTxs: GroupedAddressTx[] };
+
+type CachedAddressTxCount = { atMs: number; count: number };
+
+const ADDRESS_TX_COUNT_CACHE_TTL_MS = 60_000;
+const addressTxCountCache = new Map<string, CachedAddressTxCount>();
+const addressTxCountInFlight = new Map<string, Promise<number>>();
+let lastAddressTxCountSweepMs = 0;
+
+function sweepAddressTxCountCache(nowMs: number): void {
+  if (nowMs - lastAddressTxCountSweepMs < 60_000) return;
+  lastAddressTxCountSweepMs = nowMs;
+
+  for (const [key, entry] of addressTxCountCache) {
+    if (nowMs - entry.atMs > ADDRESS_TX_COUNT_CACHE_TTL_MS) {
+      addressTxCountCache.delete(key);
+    }
+  }
+}
+
+async function getAddressTxCountCached(env: Env, address: string, range?: { start: number; end: number }): Promise<number> {
+  const nowMs = Date.now();
+  sweepAddressTxCountCache(nowMs);
+
+  const key = `${address}:${range?.start ?? 0}:${range?.end ?? 0}`;
+  const cached = addressTxCountCache.get(key);
+  if (cached && nowMs - cached.atMs <= ADDRESS_TX_COUNT_CACHE_TTL_MS) {
+    return cached.count;
+  }
+
+  const inFlight = addressTxCountInFlight.get(key);
+  if (inFlight) {
+    return inFlight;
+  }
+
+  const request = (async (): Promise<number> => {
+    try {
+      const count = await fluxdGet<number>(env, 'getaddresstxidscount', {
+        params: JSON.stringify([{ addresses: [address], ...(range ?? {}) }]),
+      });
+
+      const normalized = typeof count === 'number' && Number.isFinite(count) ? Math.max(0, Math.trunc(count)) : 0;
+      addressTxCountCache.set(key, { atMs: Date.now(), count: normalized });
+      return normalized;
+    } finally {
+      addressTxCountInFlight.delete(key);
+    }
+  })();
+
+  addressTxCountInFlight.set(key, request);
+  return request;
+}
+
+const GROUPED_ADDRESS_TXS_CACHE_TTL_MS = 30_000;
+const groupedAddressTxsCache = new Map<string, CachedGroupedAddressTxs>();
+const groupedAddressTxsInFlight = new Map<string, Promise<GroupedAddressTx[]>>();
+let lastGroupedAddressTxsSweepMs = 0;
+
+function sweepGroupedAddressTxsCache(nowMs: number): void {
+  if (nowMs - lastGroupedAddressTxsSweepMs < 60_000) return;
+  lastGroupedAddressTxsSweepMs = nowMs;
+
+  for (const [key, entry] of groupedAddressTxsCache) {
+    if (nowMs - entry.atMs > GROUPED_ADDRESS_TXS_CACHE_TTL_MS) {
+      groupedAddressTxsCache.delete(key);
+    }
+  }
+}
+
+function groupedAddressTxsCacheKey(address: string, range?: { start: number; end: number }): string {
+  const start = range?.start ?? 0;
+  const end = range?.end ?? 0;
+  return `${address}:${start}:${end}`;
+}
+
 export async function getAddressTransactions(
   env: Env,
   address: string,
@@ -874,81 +1168,249 @@ export async function getAddressTransactions(
   const rangeStart = params.fromBlock ?? 0;
   const rangeEnd = params.toBlock ?? 0;
 
-  const rangeObj = (rangeStart > 0 && rangeEnd > 0) ? { start: rangeStart, end: rangeEnd } : undefined;
+  const explicitRange = rangeStart > 0 && rangeEnd > 0 ? { start: rangeStart, end: rangeEnd } : undefined;
+  const tipHeight = explicitRange?.end ?? (await getTipHeightCached(env));
+  const rangeObj = explicitRange ?? { start: 1, end: tipHeight };
 
-  const deltasResp = await fluxdGetWithOptions<any>(
-    env,
-    'getaddressdeltas',
-    { params: JSON.stringify([{ addresses: [address], ...(rangeObj ?? {}) }]) },
-    { chainInfo: false }
-  );
+  const fromTs = params.fromTimestamp;
+  const toTs = params.toTimestamp;
 
-  const deltas = Array.isArray(deltasResp) ? deltasResp : deltasResp?.deltas;
-  const rowsRaw = Array.isArray(deltas) ? deltas : [];
+  const limit = Math.max(1, Math.min(params.limit, 250));
+  const scanLimit = limit * 50;
 
-  const rows: AddressDeltaRow[] = rowsRaw.map((row: any) => ({
-    address: toString(row?.address, address),
-    height: toNumber(row?.height, 0),
-    txIndex: toNumber(row?.blockindex ?? row?.tx_index ?? row?.txIndex, 0),
-    txid: toString(row?.txid),
-    satoshis: toNumber(row?.satoshis, 0),
-  }));
+  const nowMs = Date.now();
+  sweepGroupedAddressTxsCache(nowMs);
 
-  const bestHeight = await fluxdGet<number>(env, 'getblockcount', { params: JSON.stringify([]) });
+  async function getGroupedTxWindow(start: number, end: number): Promise<GroupedAddressTx[]> {
+    const groupedCacheKey = groupedAddressTxsCacheKey(address, { start, end });
 
-  const grouped = new Map<string, GroupedAddressTx>();
-  for (const d of rows) {
-    const key = `${d.height}:${d.txIndex}:${d.txid}`;
-    const sat = BigInt(Math.trunc(d.satoshis));
-    const existing = grouped.get(key);
-    if (existing) {
-      existing.net += sat;
-      if (sat > 0n) existing.received += sat;
-      if (sat < 0n) existing.sent += -sat;
-      continue;
+    const cachedGrouped = groupedAddressTxsCache.get(groupedCacheKey);
+    if (cachedGrouped && nowMs - cachedGrouped.atMs <= GROUPED_ADDRESS_TXS_CACHE_TTL_MS) {
+      return cachedGrouped.groupedTxs;
     }
-    grouped.set(key, {
-      txid: d.txid,
-      height: d.height,
-      txIndex: d.txIndex,
-      net: sat,
-      received: sat > 0n ? sat : 0n,
-      sent: sat < 0n ? -sat : 0n,
-    });
+
+    const inFlight = groupedAddressTxsInFlight.get(groupedCacheKey);
+    if (inFlight) {
+      return inFlight;
+    }
+
+    const request = (async (): Promise<GroupedAddressTx[]> => {
+      try {
+        const deltasResp = await fluxdGetWithOptions<any>(
+          env,
+          'getaddressdeltas',
+          { params: JSON.stringify([{ addresses: [address], start, end }]) },
+          { chainInfo: false }
+        );
+
+        const deltas = Array.isArray(deltasResp) ? deltasResp : deltasResp?.deltas;
+        const rowsRaw = Array.isArray(deltas) ? deltas : [];
+
+        const grouped = new Map<string, GroupedAddressTx>();
+        for (const row of rowsRaw) {
+          const height = toNumber(row?.height, 0);
+          const txIndex = toNumber(row?.blockindex ?? row?.tx_index ?? row?.txIndex, 0);
+          const txid = toString(row?.txid);
+          const satoshis = toNumber(row?.satoshis, 0);
+
+          const key = `${height}:${txIndex}:${txid}`;
+          const sat = BigInt(Math.trunc(satoshis));
+          const existing = grouped.get(key);
+          if (existing) {
+            existing.net += sat;
+            if (sat > 0n) existing.received += sat;
+            if (sat < 0n) existing.sent += -sat;
+            continue;
+          }
+          grouped.set(key, {
+            txid,
+            height,
+            txIndex,
+            net: sat,
+            received: sat > 0n ? sat : 0n,
+            sent: sat < 0n ? -sat : 0n,
+          });
+        }
+
+        const result = Array.from(grouped.values()).sort((a, b) => {
+          const heightCmp = b.height - a.height;
+          if (heightCmp !== 0) return heightCmp;
+
+          const indexCmp = b.txIndex - a.txIndex;
+          if (indexCmp !== 0) return indexCmp;
+
+          return b.txid.localeCompare(a.txid);
+        });
+
+        groupedAddressTxsCache.set(groupedCacheKey, { atMs: Date.now(), groupedTxs: result });
+        return result;
+      } finally {
+        groupedAddressTxsInFlight.delete(groupedCacheKey);
+      }
+    })();
+
+    groupedAddressTxsInFlight.set(groupedCacheKey, request);
+    return request;
   }
 
-  const groupedTxs = Array.from(grouped.values()).sort((a, b) => {
-    const heightCmp = b.height - a.height;
-    if (heightCmp !== 0) return heightCmp;
+  const page: Array<{ tx: GroupedAddressTx; blockHash: string; timestamp: number }> = [];
 
-    const indexCmp = b.txIndex - a.txIndex;
-    if (indexCmp !== 0) return indexCmp;
+  let nextCursor: { height: number; txIndex: number; txid: string } | undefined;
 
-    return b.txid.localeCompare(a.txid);
-  });
+  const cursor =
+    params.cursorHeight != null && params.cursorTxIndex != null && params.cursorTxid
+      ? { height: params.cursorHeight, txIndex: params.cursorTxIndex, txid: params.cursorTxid }
+      : null;
+
+  if (!cursor && params.offset != null && params.offset > 50_000) {
+    try {
+      const cursorResp = await fluxdGet<any>(env, 'getaddresspagecursor', {
+        params: JSON.stringify([
+          {
+            addresses: [address],
+            offset: params.offset,
+            limit,
+          },
+        ]),
+      });
+
+      if (
+        cursorResp &&
+        typeof cursorResp.cursorHeight === 'number' &&
+        typeof cursorResp.cursorTxIndex === 'number' &&
+        typeof cursorResp.cursorTxid === 'string'
+      ) {
+        return getAddressTransactions(env, address, {
+          ...params,
+          offset: undefined,
+          cursorHeight: cursorResp.cursorHeight,
+          cursorTxIndex: cursorResp.cursorTxIndex,
+          cursorTxid: cursorResp.cursorTxid,
+        });
+      }
+    } catch {
+    }
+  }
+
+  if (cursor) {
+    const windowBlocks = 5_000;
+    let windowEnd = Math.min(rangeObj.end, cursor.height);
+    let didSeek = false;
+
+    while (page.length < limit && windowEnd >= rangeObj.start) {
+      const windowStart = Math.max(rangeObj.start, windowEnd - windowBlocks + 1);
+      const groupedTxs = await getGroupedTxWindow(windowStart, windowEnd);
+
+      let startIndex = 0;
+      if (!didSeek) {
+        const idx = groupedTxs.findIndex((tx) => tx.height === cursor.height && tx.txIndex === cursor.txIndex && tx.txid === cursor.txid);
+        if (idx < 0) {
+          windowEnd = windowStart - 1;
+          continue;
+        }
+        startIndex = idx + 1;
+        didSeek = true;
+      }
+
+      let scanIndex = startIndex;
+      let scanned = 0;
+      while (page.length < limit && scanIndex < groupedTxs.length && scanned < scanLimit) {
+        const tx = groupedTxs[scanIndex];
+        scanIndex += 1;
+        scanned += 1;
+
+        const header = await getBlockHeaderByHeightCached(env, tx.height);
+        if (fromTs != null && header.timestamp < fromTs) continue;
+        if (toTs != null && header.timestamp > toTs) continue;
+
+        page.push({ tx, blockHash: header.hash, timestamp: header.timestamp });
+      }
+
+      windowEnd = windowStart - 1;
+    }
+  } else {
+    const windowBlocks = 20_000;
+    let windowEnd = rangeObj.end;
+    let remainingSkip = Math.max(0, params.offset ?? 0);
+
+    while (page.length < limit && windowEnd >= rangeObj.start) {
+      const windowStart = Math.max(rangeObj.start, windowEnd - windowBlocks + 1);
+      const groupedTxs = await getGroupedTxWindow(windowStart, windowEnd);
+
+      let scanIndex = 0;
+      let scanned = 0;
+      while (page.length < limit && scanIndex < groupedTxs.length && scanned < scanLimit) {
+        const tx = groupedTxs[scanIndex];
+        scanIndex += 1;
+        scanned += 1;
+
+        const header = await getBlockHeaderByHeightCached(env, tx.height);
+        if (fromTs != null && header.timestamp < fromTs) continue;
+        if (toTs != null && header.timestamp > toTs) continue;
+
+        if (remainingSkip > 0) {
+          remainingSkip -= 1;
+          continue;
+        }
+
+        page.push({ tx, blockHash: header.hash, timestamp: header.timestamp });
+      }
+
+      windowEnd = windowStart - 1;
+    }
+  }
+
+  const last = page.length > 0 ? page[page.length - 1].tx : null;
+  if (last) {
+    nextCursor = { height: last.height, txIndex: last.txIndex, txid: last.txid };
+  }
+
+  let total = 0;
+  try {
+    total = await getAddressTxCountCached(env, address, rangeObj);
+  } catch {
+    total = 0;
+  }
+
+  const filteredTotal = total;
+
+  const minTotal = (params.offset ?? 0) + page.length;
+  if (total < minTotal) {
+    total = minTotal;
+  }
+
+  const pageTxById = new Map<string, GroupedAddressTx>();
+  for (const row of page) {
+    pageTxById.set(row.tx.txid, row.tx);
+  }
 
   const txIoByTxid = new Map<string, AddressTxIoSummary>();
+  const pageTxids = new Set(page.map((row) => row.tx.txid));
 
-  const heightsNeeded = Array.from(new Set(groupedTxs.map((tx) => tx.height)));
+  const hashesNeeded = Array.from(new Set(page.map((row) => row.blockHash).filter((h) => typeof h === 'string' && h.length === 64)));
 
-  const maxConcurrency = 8;
-  let heightCursor = 0;
+  const maxConcurrency = 4;
+  let hashCursor = 0;
 
-  const heightWorkers = Array.from({ length: Math.min(maxConcurrency, heightsNeeded.length) }, async () => {
+  const workers = Array.from({ length: Math.min(maxConcurrency, hashesNeeded.length) }, async () => {
     while (true) {
-      const idx = heightCursor;
-      heightCursor += 1;
-      if (idx >= heightsNeeded.length) return;
+      const idx = hashCursor;
+      hashCursor += 1;
+      if (idx >= hashesNeeded.length) return;
 
-      const height = heightsNeeded[idx];
-      const hash = await fluxdGet<string>(env, 'getblockhash', { params: JSON.stringify([height]) });
-      const deltas = await fluxdGet<any>(env, 'getblockdeltas', { params: JSON.stringify([hash]) });
+      const hash = hashesNeeded[idx];
+      let deltasResp: BlockDeltasResponse;
+      try {
+        deltasResp = await fluxdGet<BlockDeltasResponse>(env, 'getblockdeltas', { params: JSON.stringify([hash]) });
+      } catch {
+        continue;
+      }
 
-      const txDeltas = Array.isArray(deltas?.deltas) ? deltas.deltas : [];
+      const txDeltas = Array.isArray(deltasResp?.deltas) ? deltasResp.deltas : [];
 
       for (const entry of txDeltas) {
         const txid = typeof entry?.txid === 'string' ? entry.txid : null;
-        if (!txid) continue;
+        if (!txid || !pageTxids.has(txid)) continue;
 
         const inputRows = Array.isArray(entry?.inputs) ? entry.inputs : [];
         const outputRows = Array.isArray(entry?.outputs) ? entry.outputs : [];
@@ -960,10 +1422,8 @@ export async function getAddressTransactions(
           if (typeof input?.address === 'string' && input.address.length > 0) {
             fromSet.add(input.address);
           }
-          const sat = input?.satoshis;
-          if (typeof sat === 'number' && Number.isFinite(sat)) {
-            vinValue += BigInt(Math.max(0, Math.trunc(-sat)));
-          }
+          const sat = toNumber(input?.satoshis, 0);
+          vinValue += BigInt(Math.max(0, Math.trunc(-sat)));
         }
 
         const toSet = new Set<string>();
@@ -974,30 +1434,24 @@ export async function getAddressTransactions(
           if (typeof output?.address === 'string' && output.address.length > 0) {
             toSet.add(output.address);
           }
-          const sat = output?.satoshis;
-          if (typeof sat === 'number' && Number.isFinite(sat)) {
-            const v = BigInt(Math.max(0, Math.trunc(sat)));
-            voutValue += v;
-            if (output.address === address) {
-              receivedToAddress += v;
-            }
+          const sat = toNumber(output?.satoshis, 0);
+          const v = BigInt(Math.max(0, Math.trunc(sat)));
+          voutValue += v;
+          if (output.address === address) {
+            receivedToAddress += v;
           }
         }
 
-        const isCoinbase = inputRows.length === 0;
+        const fluxnodeType = typeof entry?.nType === 'number' ? entry.nType : null;
+        const isCoinbase = inputRows.length === 0 && fluxnodeType == null;
+
         const feeSat = isCoinbase ? 0n : (vinValue > voutValue ? (vinValue - voutValue) : 0n);
-        const changeSat = !isCoinbase ? receivedToAddress : 0n;
 
-        let sentFromAddress = 0n;
-        const groupedEntry = groupedTxs.find((t) => t.txid === txid);
-        if (groupedEntry) {
-          sentFromAddress = groupedEntry.sent;
-        }
+        const pageTx = pageTxById.get(txid);
+        const sentFromAddress = pageTx?.sent ?? 0n;
 
-        const receivedMinusChange = receivedToAddress >= changeSat
-          ? (receivedToAddress - changeSat)
-          : 0n;
-
+        const changeSat = !isCoinbase && sentFromAddress > 0n ? receivedToAddress : 0n;
+        const receivedMinusChange = receivedToAddress >= changeSat ? (receivedToAddress - changeSat) : 0n;
         const toOthersSat = !isCoinbase && sentFromAddress > receivedMinusChange
           ? (sentFromAddress - receivedMinusChange)
           : 0n;
@@ -1013,58 +1467,10 @@ export async function getAddressTransactions(
           isCoinbase,
         });
       }
-
     }
   });
 
-  await Promise.all(heightWorkers);
-
-  const headerByHeight = new Map<number, { hash: string; timestamp: number }>();
-  const txsWithTime = await Promise.all(
-    groupedTxs.map(async (tx) => {
-      const cached = headerByHeight.get(tx.height);
-      if (cached) {
-        return { tx, blockHash: cached.hash, timestamp: cached.timestamp };
-      }
-
-      const hash = await fluxdGet<string>(env, 'getblockhash', { params: JSON.stringify([tx.height]) });
-      const header = await fluxdGet<any>(env, 'getblockheader', { params: JSON.stringify([hash]) });
-      const timestamp = toNumber(header.time, 0);
-      headerByHeight.set(tx.height, { hash, timestamp });
-      return { tx, blockHash: hash, timestamp };
-    })
-  );
-
-  const fromTs = params.fromTimestamp;
-  const toTs = params.toTimestamp;
-
-  const filtered = txsWithTime.filter((row) => {
-    if (fromTs != null && row.timestamp < fromTs) return false;
-    if (toTs != null && row.timestamp > toTs) return false;
-    return true;
-  });
-
-  let startIndex = 0;
-  if (params.cursorHeight != null && params.cursorTxIndex != null && params.cursorTxid) {
-    const idx = filtered.findIndex(
-      (row) => row.tx.height === params.cursorHeight && row.tx.txIndex === params.cursorTxIndex && row.tx.txid === params.cursorTxid
-    );
-    startIndex = idx >= 0 ? idx + 1 : 0;
-  } else if (params.offset != null) {
-    startIndex = Math.max(0, params.offset);
-  }
-
-  const limit = Math.max(1, Math.min(params.limit, 250));
-  const page = filtered.slice(startIndex, startIndex + limit);
-  const next = filtered[startIndex + limit];
-
-  const nextCursor = next
-    ? {
-        height: next.tx.height,
-        txIndex: next.tx.txIndex,
-        txid: next.tx.txid,
-      }
-    : undefined;
+  await Promise.all(workers);
 
   return {
     address,
@@ -1091,13 +1497,13 @@ export async function getAddressTransactions(
         fromAddressCount: io?.fromAddressCount ?? fromAddresses.length,
         toAddresses,
         toAddressCount: io?.toAddressCount ?? toAddresses.length,
-        selfTransfer: fromAddresses.includes(address) && toAddresses.includes(address),
-        confirmations: confirmationsFromHeight(bestHeight, row.tx.height > 0 ? row.tx.height : null),
+        selfTransfer: row.tx.received > 0n && row.tx.sent > 0n,
+        confirmations: confirmationsFromHeight(tipHeight, row.tx.height > 0 ? row.tx.height : null),
         isCoinbase,
       };
     }),
-    total: groupedTxs.length,
-    filteredTotal: filtered.length,
+    total,
+    filteredTotal,
     limit,
     offset: params.offset,
     nextCursor,
