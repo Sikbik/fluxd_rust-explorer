@@ -1342,8 +1342,13 @@ export async function getAddressTransactions(
       while (page.length < limit && scanIndex < groupedTxs.length && scanned < scanLimit) {
         const tx = groupedTxs[scanIndex];
         scanIndex += 1;
-        scanned += 1;
 
+        if (remainingSkip > 0 && fromTs == null && toTs == null) {
+          remainingSkip -= 1;
+          continue;
+        }
+
+        scanned += 1;
         const header = await getBlockHeaderByHeightCached(env, tx.height);
         if (fromTs != null && header.timestamp < fromTs) continue;
         if (toTs != null && header.timestamp > toTs) continue;
