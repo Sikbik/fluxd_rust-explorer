@@ -402,6 +402,36 @@ impl KeyValueStore for FjallStore {
         Ok(())
     }
 
+    fn scan_range(
+        &self,
+        column: Column,
+        start: &[u8],
+        end: &[u8],
+    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, StoreError> {
+        let partition = self.partition(column)?;
+        let mut results = Vec::new();
+        for entry in partition.range(start..=end) {
+            let (key, value) = entry.map_err(map_err)?;
+            results.push((key.to_vec(), value.to_vec()));
+        }
+        Ok(results)
+    }
+
+    fn for_each_range<'a>(
+        &self,
+        column: Column,
+        start: &[u8],
+        end: &[u8],
+        visitor: &mut PrefixVisitor<'a>,
+    ) -> Result<(), StoreError> {
+        let partition = self.partition(column)?;
+        for entry in partition.range(start..=end) {
+            let (key, value) = entry.map_err(map_err)?;
+            visitor(key.as_ref(), value.as_ref())?;
+        }
+        Ok(())
+    }
+
     fn write_batch(&self, batch: &WriteBatch) -> Result<(), StoreError> {
         if batch.len() == 0 {
             return Ok(());

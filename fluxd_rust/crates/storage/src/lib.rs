@@ -40,6 +40,8 @@ pub enum Column {
     FluxnodeKey,
     AddressOutpoint,
     AddressDelta,
+    AddressTxTotal,
+    AddressTxCheckpoint,
     TimestampIndex,
     BlockTimestamp,
     BlockUndo,
@@ -48,7 +50,7 @@ pub enum Column {
 }
 
 impl Column {
-    pub const ALL: [Column; 20] = [
+    pub const ALL: [Column; 22] = [
         Column::BlockIndex,
         Column::HeaderIndex,
         Column::HeightIndex,
@@ -64,6 +66,8 @@ impl Column {
         Column::FluxnodeKey,
         Column::AddressOutpoint,
         Column::AddressDelta,
+        Column::AddressTxTotal,
+        Column::AddressTxCheckpoint,
         Column::TimestampIndex,
         Column::BlockTimestamp,
         Column::BlockUndo,
@@ -88,11 +92,13 @@ impl Column {
             Column::FluxnodeKey => 1 << 12,
             Column::AddressOutpoint => 1 << 13,
             Column::AddressDelta => 1 << 14,
-            Column::TimestampIndex => 1 << 15,
-            Column::BlockTimestamp => 1 << 16,
-            Column::BlockUndo => 1 << 17,
-            Column::Meta => 1 << 18,
-            Column::UnconnectedBlock => 1 << 19,
+            Column::AddressTxTotal => 1 << 15,
+            Column::AddressTxCheckpoint => 1 << 16,
+            Column::TimestampIndex => 1 << 17,
+            Column::BlockTimestamp => 1 << 18,
+            Column::BlockUndo => 1 << 19,
+            Column::Meta => 1 << 20,
+            Column::UnconnectedBlock => 1 << 21,
         }
     }
 
@@ -117,6 +123,8 @@ impl Column {
             Column::FluxnodeKey => "fluxnode_key",
             Column::AddressOutpoint => "address_outpoint",
             Column::AddressDelta => "address_delta",
+            Column::AddressTxTotal => "address_tx_total",
+            Column::AddressTxCheckpoint => "address_tx_checkpoint",
             Column::TimestampIndex => "timestamp_index",
             Column::BlockTimestamp => "block_timestamp",
             Column::BlockUndo => "block_undo",
@@ -270,6 +278,7 @@ pub trait KeyValueStore: Send + Sync {
     fn get(&self, column: Column, key: &[u8]) -> Result<Option<Vec<u8>>, StoreError>;
     fn put(&self, column: Column, key: &[u8], value: &[u8]) -> Result<(), StoreError>;
     fn delete(&self, column: Column, key: &[u8]) -> Result<(), StoreError>;
+
     fn scan_prefix(&self, column: Column, prefix: &[u8]) -> Result<ScanResult, StoreError>;
     fn for_each_prefix<'a>(
         &self,
@@ -277,6 +286,21 @@ pub trait KeyValueStore: Send + Sync {
         prefix: &[u8],
         visitor: &mut PrefixVisitor<'a>,
     ) -> Result<(), StoreError>;
+
+    fn scan_range(
+        &self,
+        column: Column,
+        start: &[u8],
+        end: &[u8],
+    ) -> Result<ScanResult, StoreError>;
+    fn for_each_range<'a>(
+        &self,
+        column: Column,
+        start: &[u8],
+        end: &[u8],
+        visitor: &mut PrefixVisitor<'a>,
+    ) -> Result<(), StoreError>;
+
     fn write_batch(&self, batch: &WriteBatch) -> Result<(), StoreError>;
 }
 
@@ -304,6 +328,20 @@ impl<T: KeyValueStore + ?Sized> KeyValueStore for Arc<T> {
         visitor: &mut PrefixVisitor<'a>,
     ) -> Result<(), StoreError> {
         self.as_ref().for_each_prefix(column, prefix, visitor)
+    }
+
+    fn scan_range(&self, column: Column, start: &[u8], end: &[u8]) -> Result<ScanResult, StoreError> {
+        self.as_ref().scan_range(column, start, end)
+    }
+
+    fn for_each_range<'a>(
+        &self,
+        column: Column,
+        start: &[u8],
+        end: &[u8],
+        visitor: &mut PrefixVisitor<'a>,
+    ) -> Result<(), StoreError> {
+        self.as_ref().for_each_range(column, start, end, visitor)
     }
 
     fn write_batch(&self, batch: &WriteBatch) -> Result<(), StoreError> {

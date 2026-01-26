@@ -64,6 +64,48 @@ impl KeyValueStore for MemoryStore {
         Ok(())
     }
 
+    fn scan_range(
+        &self,
+        column: Column,
+        start: &[u8],
+        end: &[u8],
+    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, StoreError> {
+        let guard = self.inner.read().expect("memory store lock");
+        let mut results = Vec::new();
+
+        for ((entry_column, key), value) in guard.iter() {
+            if *entry_column != column {
+                continue;
+            }
+            if key.as_slice() < start || key.as_slice() > end {
+                continue;
+            }
+            results.push((key.clone(), value.clone()));
+        }
+
+        Ok(results)
+    }
+
+    fn for_each_range<'a>(
+        &self,
+        column: Column,
+        start: &[u8],
+        end: &[u8],
+        visitor: &mut PrefixVisitor<'a>,
+    ) -> Result<(), StoreError> {
+        let guard = self.inner.read().expect("memory store lock");
+        for ((entry_column, key), value) in guard.iter() {
+            if *entry_column != column {
+                continue;
+            }
+            if key.as_slice() < start || key.as_slice() > end {
+                continue;
+            }
+            visitor(key.as_slice(), value.as_slice())?;
+        }
+        Ok(())
+    }
+
     fn write_batch(&self, batch: &WriteBatch) -> Result<(), StoreError> {
         let mut guard = self.inner.write().expect("memory store lock");
         for op in batch.iter() {
