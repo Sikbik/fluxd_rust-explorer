@@ -605,7 +605,7 @@ export function registerRoutes(app: Express, env: Env) {
      try {
        const address = req.params.address;
 
-       const limit = clampInt(toInt(req.query.limit) ?? 25, 1, 100);
+       const limit = clampInt(toInt(req.query.limit) ?? 25, 1, 250);
        const offsetRaw = toInt(req.query.offset);
        const offset = offsetRaw != null ? Math.max(0, offsetRaw) : undefined;
 

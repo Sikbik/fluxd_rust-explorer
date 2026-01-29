@@ -1480,6 +1480,17 @@ export async function getAddressTransactions(
   const pageTxids = new Set(page.map((row) => row.tx.txid));
 
   const hashesNeeded = Array.from(new Set(page.map((row) => row.blockHash).filter((h) => typeof h === 'string' && h.length === 64)));
+  const txidsByBlockHash = new Map<string, string[]>();
+  for (const row of page) {
+    const hash = row.blockHash;
+    if (typeof hash !== 'string' || hash.length !== 64) continue;
+    const list = txidsByBlockHash.get(hash);
+    if (list) {
+      list.push(row.tx.txid);
+    } else {
+      txidsByBlockHash.set(hash, [row.tx.txid]);
+    }
+  }
 
   const maxConcurrency = 4;
   let hashCursor = 0;
@@ -1491,9 +1502,12 @@ export async function getAddressTransactions(
       if (idx >= hashesNeeded.length) return;
 
       const hash = hashesNeeded[idx];
+      const txidsForBlock = txidsByBlockHash.get(hash) ?? [];
       let deltasResp: BlockDeltasResponse;
       try {
-        deltasResp = await fluxdGet<BlockDeltasResponse>(env, 'getblockdeltas', { params: JSON.stringify([hash]) });
+        deltasResp = await fluxdGet<BlockDeltasResponse>(env, 'getblockdeltas', {
+          params: JSON.stringify([{ hash, txids: txidsForBlock }]),
+        });
       } catch {
         continue;
       }

@@ -12487,7 +12487,49 @@ fn rpc_getblockdeltas<S: fluxd_storage::KeyValueStore>(
             "getblockdeltas expects 1 parameter",
         ));
     }
-    let (hash, entry) = resolve_block_hash(chainstate, &params[0])?;
+
+    let (hash_value, filter_txids) = match &params[0] {
+        Value::Object(map) => {
+            let hash_value = map.get("hash").ok_or_else(|| {
+                RpcError::new(
+                    RPC_INVALID_PARAMETER,
+                    "getblockdeltas object parameter requires \"hash\"",
+                )
+            })?;
+
+            let filter_txids = if let Some(txids_value) = map.get("txids") {
+                let txids = txids_value.as_array().ok_or_else(|| {
+                    RpcError::new(RPC_INVALID_PARAMETER, "txids must be an array")
+                })?;
+
+                const MAX_TXIDS: usize = 10_000;
+                if txids.len() > MAX_TXIDS {
+                    return Err(RpcError::new(
+                        RPC_INVALID_PARAMETER,
+                        "txids exceeds maximum length",
+                    ));
+                }
+
+                let mut set: HashSet<Hash256> = HashSet::with_capacity(txids.len());
+                for txid_value in txids {
+                    let text = txid_value.as_str().ok_or_else(|| {
+                        RpcError::new(RPC_INVALID_PARAMETER, "txids must be strings")
+                    })?;
+                    let txid = hash256_from_hex(text)
+                        .map_err(|_| RpcError::new(RPC_INVALID_PARAMETER, "invalid txid"))?;
+                    set.insert(txid);
+                }
+                Some(set)
+            } else {
+                None
+            };
+
+            (hash_value, filter_txids)
+        }
+        value => (value, None),
+    };
+
+    let (hash, entry) = resolve_block_hash(chainstate, hash_value)?;
 
     let best_height = best_block_height(chainstate)?;
     let main_hash = chainstate.height_hash(entry.height).map_err(map_internal)?;
@@ -12510,6 +12552,13 @@ fn rpc_getblockdeltas<S: fluxd_storage::KeyValueStore>(
 
     for (tx_index, tx) in block.transactions.iter().enumerate() {
         let txid = tx.txid().map_err(map_internal)?;
+
+        if let Some(filter_txids) = filter_txids.as_ref() {
+            if !filter_txids.contains(&txid) {
+                continue;
+            }
+        }
+
         let mut entry_obj = serde_json::Map::new();
         entry_obj.insert("txid".to_string(), Value::String(hash256_to_hex(&txid)));
         entry_obj.insert("index".to_string(), Value::Number((tx_index as i64).into()));
@@ -20504,6 +20553,31 @@ mod tests {
             assert!(obj.contains_key(key), "missing key {key}");
         }
         assert!(obj.get("deltas").and_then(Value::as_array).is_some());
+    }
+
+    #[test]
+    fn getblockdeltas_filters_by_txids() {
+        let (chainstate, params, _data_dir, _address, txid, _vout) =
+            setup_regtest_chain_with_p2pkh_utxo();
+        let txid_hex = hash256_to_hex(&txid);
+
+        let filtered = rpc_getblockdeltas(
+            &chainstate,
+            vec![json!({ "hash": 1, "txids": [txid_hex] })],
+            &params,
+        )
+        .expect("rpc");
+        let deltas = filtered["deltas"].as_array().expect("deltas array");
+        assert_eq!(deltas.len(), 1);
+
+        let missing = rpc_getblockdeltas(
+            &chainstate,
+            vec![json!({ "hash": 1, "txids": ["0000000000000000000000000000000000000000000000000000000000000000"] })],
+            &params,
+        )
+        .expect("rpc");
+        let deltas = missing["deltas"].as_array().expect("deltas array");
+        assert!(deltas.is_empty());
     }
 
     #[test]

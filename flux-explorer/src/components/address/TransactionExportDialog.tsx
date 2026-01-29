@@ -114,9 +114,30 @@ export function TransactionExportDialog({
       const toTimestamp = Math.floor(dateRange.to.getTime() / 1000);
 
       // Use moderate batch size with cursor-based pagination for efficiency.
-      // NOTE: Higher values can trigger ClickHouse HTTP param size limits when the backend
-      // fetches additional per-tx details (e.g., fees) for large batches.
-      const batchSize = 1000;
+      // Our backend (explorer-api -> fluxd_rust) does per-block lookups to enrich transactions,
+      // so extremely large pages can be slow or time out.
+      const batchSize = 250;
+      const delayBetweenPagesMs = 25;
+      const MAX_EXPORT_TRANSACTIONS = 50_000;
+
+      const fetchWithRetry = async <T,>(fn: () => Promise<T>, label: string): Promise<T> => {
+        const attempts = 3;
+        let lastErr: unknown;
+        for (let attempt = 1; attempt <= attempts; attempt++) {
+          try {
+            return await fn();
+          } catch (err) {
+            lastErr = err;
+            if (attempt < attempts) {
+              setCurrentStatus(`${label} (retry ${attempt}/${attempts - 1})...`);
+              await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
+              continue;
+            }
+          }
+        }
+        throw lastErr instanceof Error ? lastErr : new Error('Request failed');
+      };
+
       let allTransactions: AddressTransactionSummary[] = [];
       let cursor: { height: number; txIndex: number; txid: string } | undefined;
       let hasMore = true;
@@ -125,7 +146,9 @@ export function TransactionExportDialog({
       // Step 1: Fetch all transactions in the date range using cursor pagination
       while (hasMore) {
         // Fetch batch from API using cursor-based pagination
-        const data = await FluxAPI.getAddressTransactions([address], {
+        const data = await fetchWithRetry(
+          () =>
+            FluxAPI.getAddressTransactions([address], {
           from: 0,
           to: batchSize,
           fromTimestamp,
@@ -133,7 +156,9 @@ export function TransactionExportDialog({
           cursorHeight: cursor?.height,
           cursorTxIndex: cursor?.txIndex,
           cursorTxid: cursor?.txid,
-        });
+            }),
+          'Fetching transactions'
+        );
 
         const items = data.items || [];
         allTransactions = allTransactions.concat(items);
@@ -142,6 +167,12 @@ export function TransactionExportDialog({
         cursor = data.nextCursor;
 
         setFetchedCount(allTransactions.length);
+
+        if (allTransactions.length >= MAX_EXPORT_TRANSACTIONS) {
+          alert(`Export is limited to ${MAX_EXPORT_TRANSACTIONS.toLocaleString()} transactions. Please narrow the date range.`);
+          setIsExporting(false);
+          return;
+        }
 
         // Update target count based on filteredTotal from first response
         if (totalEstimate === 0 && data.filteredTotal) {
@@ -156,6 +187,10 @@ export function TransactionExportDialog({
         // Break if no more results or no next cursor
         if (items.length === 0 || !cursor || allTransactions.length >= (totalEstimate || Infinity)) {
           hasMore = false;
+        }
+
+        if (hasMore && delayBetweenPagesMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, delayBetweenPagesMs));
         }
       }
 

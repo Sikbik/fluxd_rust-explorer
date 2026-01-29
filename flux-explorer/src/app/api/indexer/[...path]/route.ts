@@ -167,10 +167,12 @@ async function proxyRequest(
       }
     }
 
+    const timeoutMs = path.startsWith('api/v1/addresses/') ? 30_000 : 15_000;
+
     const response = await fetch(targetUrl, {
       ...options,
       cache: 'no-store',
-      signal: AbortSignal.timeout(15_000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
 
     // Get response body
@@ -206,4 +208,3 @@ async function proxyRequest(
     );
   }
 }
-
