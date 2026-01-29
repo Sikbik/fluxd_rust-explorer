@@ -25,6 +25,34 @@ function toString(value: unknown, fallback = ''): string {
   return typeof value === 'string' ? value : value == null ? fallback : String(value);
 }
 
+function toIsoTimestamp(value: unknown, fallback: string): string {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (trimmed.length === 0) return fallback;
+
+    if (/^\d+$/.test(trimmed)) {
+      const num = Number(trimmed);
+      if (Number.isFinite(num)) {
+        const ms = trimmed.length >= 13 ? num : num * 1000;
+        const date = new Date(ms);
+        if (!Number.isNaN(date.getTime())) return date.toISOString();
+      }
+    }
+
+    const date = new Date(trimmed);
+    if (!Number.isNaN(date.getTime())) return date.toISOString();
+    return fallback;
+  }
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const ms = value >= 1e12 ? value : value * 1000;
+    const date = new Date(ms);
+    if (!Number.isNaN(date.getTime())) return date.toISOString();
+  }
+
+  return fallback;
+}
+
 function toSatoshiBigInt(value: unknown): bigint {
   if (typeof value === 'bigint') return value;
   if (typeof value === 'number' && Number.isFinite(value)) return BigInt(Math.trunc(value));
@@ -463,6 +491,19 @@ function fixturesGet(method: string, params?: Record<string, string | number | b
     return [FIXTURE_BLOCK_1.hash];
   }
 
+  if (method === 'gettxstats') {
+    const now = String(Math.floor(Date.now() / 1000));
+    return {
+      low: 0,
+      high: 0,
+      blocks: 1,
+      txCount: 0,
+      regularTxCount: 0,
+      fluxnodeTxCount: 0,
+      generatedAt: now,
+    };
+  }
+
   if (method === 'gettxoutsetinfo') {
     return {
       height: FIXTURE_BLOCK_1.height,
@@ -567,7 +608,7 @@ function fixturesGet(method: string, params?: Record<string, string | number | b
   }
 
   if (method === 'getaddressbalance') {
-    return { balance: '0', received: '0' };
+    return { balance: '0', received: '0', cumulusCount: 0, nimbusCount: 0, stratusCount: 0 };
   }
 
   if (method === 'getaddressutxos') {
@@ -794,7 +835,18 @@ export async function getLatestBlocks(
   env: Env,
   limit: number,
   tipHeightHint?: number
-): Promise<{ blocks: Array<{ height: number; hash: string; time?: number; size?: number; txCount?: number }> }> {
+): Promise<{
+  blocks: Array<{
+    height: number;
+    hash: string;
+    time?: number;
+    size?: number;
+    txCount?: number;
+    regularTxCount?: number;
+    nodeConfirmationCount?: number;
+    tierCounts?: { cumulus: number; nimbus: number; stratus: number; starting: number; unknown: number };
+  }>;
+}> {
   const tipHeight = tipHeightHint ?? await fluxdGet<number>(env, 'getblockcount', { params: JSON.stringify([]) });
 
   const capped = Math.max(1, Math.min(Math.floor(limit), 50));
@@ -808,12 +860,32 @@ export async function getLatestBlocks(
       const verbose = 1;
       const block = await fluxdGet<any>(env, 'getblock', { params: JSON.stringify([h, verbose]) });
       const txs = Array.isArray(block?.tx) ? block.tx : [];
+      const txCount = txs.length;
+      const nodeConfirmationCount = toNumber(block?.nodeConfirmationCount ?? block?.node_confirmation_count, 0);
+      const regularTxCount = toNumber(
+        block?.regularTxCount ?? block?.regular_tx_count,
+        Math.max(0, txCount - nodeConfirmationCount)
+      );
+      const tierCountsSource = block?.tierCounts ?? block?.tier_counts;
+      const tierCounts =
+        tierCountsSource && typeof tierCountsSource === 'object'
+          ? {
+              cumulus: toNumber((tierCountsSource as any).cumulus, 0),
+              nimbus: toNumber((tierCountsSource as any).nimbus, 0),
+              stratus: toNumber((tierCountsSource as any).stratus, 0),
+              starting: toNumber((tierCountsSource as any).starting, 0),
+              unknown: toNumber((tierCountsSource as any).unknown, 0),
+            }
+          : undefined;
       return {
         height: toNumber(block?.height, h),
         hash: toString(block?.hash),
         time: toNumber(block?.time),
         size: toNumber(block?.size, 0),
-        txCount: txs.length,
+        txCount,
+        regularTxCount,
+        nodeConfirmationCount,
+        tierCounts,
       };
     })
   );
@@ -930,20 +1002,32 @@ export async function getTransaction(env: Env, txid: string, includeHex: boolean
   };
 }
 
-export async function getAddressSummary(env: Env, address: string): Promise<{ address: string; balance: string; totalReceived: string; totalSent: string; unconfirmedBalance: string; unconfirmedTxs: number; txs: number; transactions: Array<{ txid: string }> }> {
+export async function getAddressSummary(env: Env, address: string): Promise<{
+  address: string;
+  balance: string;
+  totalReceived: string;
+  totalSent: string;
+  unconfirmedBalance: string;
+  unconfirmedTxs: number;
+  txs: number;
+  transactions: Array<{ txid: string }>;
+  cumulusCount?: number;
+  nimbusCount?: number;
+  stratusCount?: number;
+}> {
   const bestHeight = await getTipHeightCached(env);
   const previewWindowBlocks = 2_000;
   const previewRange = { start: Math.max(1, bestHeight - previewWindowBlocks), end: bestHeight };
 
-  const [balance, txCount, txids, mempoolDeltas] = await Promise.all([
+  const [addressBalance, txCount, txids, mempoolDeltas] = await Promise.all([
     fluxdGet<any>(env, 'getaddressbalance', { params: JSON.stringify([{ addresses: [address] }]) }),
     fluxdGet<number>(env, 'getaddresstxidscount', { params: JSON.stringify([{ addresses: [address] }]) }),
     fluxdGet<string[]>(env, 'getaddresstxids', { params: JSON.stringify([{ addresses: [address], ...previewRange }]) }),
     fluxdGet<any[]>(env, 'getaddressmempool', { params: JSON.stringify([{ addresses: [address] }]) }),
   ]);
 
-  const satBalance = toSatoshiBigInt(balance.balance);
-  const satReceived = toSatoshiBigInt(balance.received);
+  const satBalance = toSatoshiBigInt(addressBalance.balance);
+  const satReceived = toSatoshiBigInt(addressBalance.received);
   const satSent = satReceived > satBalance ? (satReceived - satBalance) : 0n;
 
   const deltas = Array.isArray(mempoolDeltas) ? mempoolDeltas : [];
@@ -959,6 +1043,9 @@ export async function getAddressSummary(env: Env, address: string): Promise<{ ad
     unconfirmedTxs,
     txs: typeof txCount === 'number' && Number.isFinite(txCount) ? Math.max(0, Math.trunc(txCount)) : (Array.isArray(txids) ? txids.length : 0),
     transactions: Array.isArray(txids) ? txids.slice(-25).reverse().map((id) => ({ txid: toString(id) })) : [],
+    cumulusCount: addressBalance?.cumulusCount != null ? toNumber(addressBalance.cumulusCount, 0) : undefined,
+    nimbusCount: addressBalance?.nimbusCount != null ? toNumber(addressBalance.nimbusCount, 0) : undefined,
+    stratusCount: addressBalance?.stratusCount != null ? toNumber(addressBalance.stratusCount, 0) : undefined,
   };
 }
 
@@ -1540,6 +1627,7 @@ export async function getSupplyStats(env: Env): Promise<{
   blockHeight: number;
   transparentSupply: string;
   shieldedPool: string;
+  circulatingSupply: string;
   totalSupply: string;
   lastUpdate: string;
   timestamp: string;
@@ -1557,14 +1645,143 @@ export async function getSupplyStats(env: Env): Promise<{
 
   const transparentSupplyZat = totalSupplyZat > shieldedPoolZat ? (totalSupplyZat - shieldedPoolZat) : 0n;
 
+  const blockHeight = toNumber(chainInfo.blocks, 0);
+  const circulatingSupplyZat = calculateCirculatingSupplyZat(blockHeight, totalSupplyZat);
+
   return {
-    blockHeight: toNumber(chainInfo.blocks, 0),
+    blockHeight,
     transparentSupply: transparentSupplyZat.toString(),
     shieldedPool: shieldedPoolZat.toString(),
+    circulatingSupply: circulatingSupplyZat.toString(),
     totalSupply: totalSupplyZat.toString(),
     lastUpdate: now,
     timestamp: now,
   };
+}
+
+function calculateMainchainSupplyZat(height: number): bigint {
+  const PON_HEIGHT = 2_020_000;
+  const FIRST_HALVING = 657_850;
+  const HALVING_INTERVAL = 655_350;
+
+  const FUND_RELEASES = [
+    { height: 836_274, amount: 7_500_000 },
+    { height: 836_994, amount: 2_500_000 },
+    { height: 837_714, amount: 22_000_000 },
+    { height: 859_314, amount: 22_000_000 },
+    { height: 880_914, amount: 22_000_000 },
+    { height: 902_514, amount: 22_000_000 },
+    { height: 924_114, amount: 22_000_000 },
+    { height: 945_714, amount: 22_000_000 },
+    { height: 967_314, amount: 22_000_000 },
+    { height: 988_914, amount: 22_000_000 },
+    { height: 1_010_514, amount: 22_000_000 },
+    { height: 1_032_114, amount: 22_000_000 },
+  ];
+
+  let subsidy = 150;
+  const miningHeight = Math.min(height, PON_HEIGHT - 1);
+  const halvings = Math.min(2, Math.floor((miningHeight - 2500) / HALVING_INTERVAL));
+
+  let coins = (FIRST_HALVING - 5000) * 150 + 375_000 + 13_020_000;
+
+  for (let i = 1; i <= halvings; i++) {
+    subsidy = subsidy / 2;
+
+    if (i === halvings) {
+      const nBlocksMain = miningHeight - FIRST_HALVING - ((i - 1) * HALVING_INTERVAL);
+      coins += nBlocksMain * subsidy;
+    } else {
+      coins += HALVING_INTERVAL * subsidy;
+    }
+  }
+
+  for (const release of FUND_RELEASES) {
+    if (height >= release.height) coins += release.amount;
+  }
+
+  if (height >= PON_HEIGHT) {
+    coins += (height - PON_HEIGHT + 1) * 14;
+  }
+
+  return BigInt(Math.floor(coins * 100_000_000));
+}
+
+function calculateCirculatingSupplyAllChainsZat(height: number): bigint {
+  const PON_HEIGHT = 2_020_000;
+  const ASSET_MINING_START = 825_000;
+  const FIRST_HALVING = 657_850;
+  const HALVING_INTERVAL = 655_350;
+  const EXCHANGE_FUND_HEIGHT = 835_554;
+  const EXCHANGE_FUND_AMOUNT = 10_000_000;
+  const CHAIN_FUND_AMOUNT = 1_000_000;
+  const SNAPSHOT_AMOUNT = 12_313_785.94991485;
+
+  const CHAINS = [
+    { name: 'KDA', launchHeight: 825_000 },
+    { name: 'BSC', launchHeight: 883_000 },
+    { name: 'ETH', launchHeight: 883_000 },
+    { name: 'SOL', launchHeight: 969_500 },
+    { name: 'TRX', launchHeight: 969_500 },
+    { name: 'AVAX', launchHeight: 1_170_000 },
+    { name: 'ERGO', launchHeight: 1_210_000 },
+    { name: 'ALGO', launchHeight: 1_330_000 },
+    { name: 'MATIC', launchHeight: 1_414_000 },
+    { name: 'BASE', launchHeight: 1_738_000 },
+  ];
+
+  let subsidy = 150;
+  const miningHeight = Math.min(height, PON_HEIGHT - 1);
+  const halvings = Math.min(2, Math.floor((miningHeight - 2500) / HALVING_INTERVAL));
+
+  let coins = (FIRST_HALVING - 5000) * 150 + 375_000 + 13_020_000;
+
+  if (height >= EXCHANGE_FUND_HEIGHT) {
+    coins += EXCHANGE_FUND_AMOUNT;
+  }
+
+  for (const chain of CHAINS) {
+    if (height > chain.launchHeight) {
+      coins += CHAIN_FUND_AMOUNT + SNAPSHOT_AMOUNT;
+    }
+  }
+
+  for (let i = 1; i <= halvings; i++) {
+    subsidy = subsidy / 2;
+
+    if (i === halvings) {
+      const nBlocksMain = miningHeight - FIRST_HALVING - ((i - 1) * HALVING_INTERVAL);
+      coins += nBlocksMain * subsidy;
+
+      if (miningHeight > ASSET_MINING_START) {
+        const activeChains = CHAINS.filter((chain) => miningHeight > chain.launchHeight).length;
+        coins += nBlocksMain * subsidy * activeChains / 10;
+      }
+    } else {
+      coins += HALVING_INTERVAL * subsidy;
+
+      if (miningHeight > ASSET_MINING_START) {
+        const nBlocksAsset = HALVING_INTERVAL - (ASSET_MINING_START - FIRST_HALVING);
+        const activeChains = CHAINS.filter((chain) => miningHeight > chain.launchHeight).length;
+        coins += nBlocksAsset * subsidy * activeChains / 10;
+      }
+    }
+  }
+
+  if (height >= PON_HEIGHT) {
+    coins += (height - PON_HEIGHT + 1) * 14 * 2;
+  }
+
+  return BigInt(Math.floor(coins * 100_000_000));
+}
+
+function calculateCirculatingSupplyZat(blockHeight: number, totalSupplyZat: bigint): bigint {
+  const theoreticalMainchain = calculateMainchainSupplyZat(blockHeight);
+  const theoreticalAllChains = calculateCirculatingSupplyAllChainsZat(blockHeight);
+  const lockedParallelAssets = theoreticalMainchain - theoreticalAllChains;
+
+  const circulating = totalSupplyZat - lockedParallelAssets;
+  return circulating < 0n ? 0n : circulating;
 }
 
 export interface FluxIndexerRichListResponse {
@@ -1597,7 +1814,7 @@ export async function getRichList(
   const addresses = Array.isArray(response.addresses) ? response.addresses : [];
 
   return {
-    lastUpdate: toString(response.lastUpdate, new Date().toISOString()),
+    lastUpdate: toIsoTimestamp(response.lastUpdate, new Date().toISOString()),
     lastBlockHeight: toNumber(response.lastBlockHeight, 0),
     totalSupply: toSatoshiString(response.totalSupply ?? 0),
     totalAddresses: toNumber(response.totalAddresses, 0),
@@ -1652,12 +1869,14 @@ type DashboardLatestReward = {
   outputs: Array<DashboardRewardOutput>;
 };
 
-let cachedTxCount24h: { atMs: number; value: number } | null = null;
+let cachedTxCount24h: { atMs: number; total: number; regular: number; fluxnode: number } | null = null;
 
 export async function getDashboardStats(env: Env): Promise<{
   latestBlock: { height: number; hash: string | null; timestamp: number | null };
   averages: { blockTimeSeconds: number };
   transactions24h: number;
+  transactions24hNormal: number;
+  transactions24hFluxnode: number;
   latestRewards: Array<DashboardLatestReward>;
   generatedAt: string;
 }> {
@@ -1670,54 +1889,33 @@ export async function getDashboardStats(env: Env): Promise<{
 
   const tipUnix = latestTimestamp || Math.floor(Date.now() / 1000);
   const windowSeconds = 24 * 60 * 60;
-  const low = Math.max(0, tipUnix - windowSeconds);
+  const high = tipUnix >= 0 && tipUnix < 0xffff_fffe ? tipUnix + 1 : tipUnix;
+  const low = Math.max(0, high - windowSeconds);
 
-  let txCount24h = cachedTxCount24h?.value ?? 0;
+  let txCount24h = cachedTxCount24h?.total ?? 0;
+  let txCount24hNormal = cachedTxCount24h?.regular ?? 0;
+  let txCount24hFluxnode = cachedTxCount24h?.fluxnode ?? 0;
   const txCountCacheAt = cachedTxCount24h?.atMs ?? 0;
   const txCountCacheTtlMs = 5 * 60_000;
 
   if (Date.now() - txCountCacheAt > txCountCacheTtlMs) {
     try {
-      const hashes = await fluxdGet<string[]>(env, 'getblockhashes', {
-        params: JSON.stringify([tipUnix, low, { noOrphans: true }]),
-      });
+      const stats = await fluxdGet<any>(
+        env,
+        'gettxstats',
+        { params: JSON.stringify([high, low, { noOrphans: true }]) },
+        60_000
+      );
 
-    const lastN = hashes.length > 250 ? hashes.slice(-250) : hashes;
-    if (lastN.length > 0) {
-      const firstHash = lastN[0];
-      const lastHash = lastN[lastN.length - 1];
+      txCount24h = toNumber(stats?.txCount, 0);
+      txCount24hFluxnode = toNumber(stats?.fluxnodeTxCount, 0);
+      txCount24hNormal = toNumber(stats?.regularTxCount, Math.max(0, txCount24h - txCount24hFluxnode));
 
-      const [firstHeader, lastHeader] = await Promise.all([
-        fluxdGet<any>(env, 'getblockheader', { params: JSON.stringify([firstHash]) }),
-        fluxdGet<any>(env, 'getblockheader', { params: JSON.stringify([lastHash]) }),
-      ]);
-
-      const firstHeight = toNumber(firstHeader?.height, -1);
-      const lastHeight = toNumber(lastHeader?.height, -1);
-
-      if (firstHeight >= 0 && lastHeight >= 0) {
-        const minHeight = Math.max(0, Math.min(firstHeight, lastHeight) - 50);
-        const maxHeight = Math.max(firstHeight, lastHeight);
-
-        const countRange = await fluxdGet<any>(env, 'getaddressdeltas', {
-          params: JSON.stringify([{ addresses: [], start: minHeight, end: maxHeight }]),
-        });
-
-        const countRows = Array.isArray(countRange) ? countRange : countRange?.deltas;
-        const unique = new Set<string>();
-        if (Array.isArray(countRows)) {
-          for (const row of countRows) {
-            const txid = typeof row?.txid === 'string' ? row.txid : null;
-            if (txid) unique.add(txid);
-          }
-        }
-        txCount24h = unique.size;
-      }
-    }
-
-      cachedTxCount24h = { atMs: Date.now(), value: txCount24h };
+      cachedTxCount24h = { atMs: Date.now(), total: txCount24h, regular: txCount24hNormal, fluxnode: txCount24hFluxnode };
     } catch {
-      txCount24h = cachedTxCount24h?.value ?? 0;
+      txCount24h = cachedTxCount24h?.total ?? 0;
+      txCount24hNormal = cachedTxCount24h?.regular ?? 0;
+      txCount24hFluxnode = cachedTxCount24h?.fluxnode ?? 0;
     }
   }
 
@@ -1788,6 +1986,8 @@ export async function getDashboardStats(env: Env): Promise<{
       blockTimeSeconds: avgBlockTimeSeconds,
     },
     transactions24h: txCount24h,
+    transactions24hNormal: txCount24hNormal,
+    transactions24hFluxnode: txCount24hFluxnode,
     latestRewards,
     generatedAt: nowIso,
   };

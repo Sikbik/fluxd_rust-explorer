@@ -427,7 +427,7 @@ export function registerRoutes(app: Express, env: Env) {
 
     if (cached) {
       if (now - cached.at >= HOME_SNAPSHOT_FRESH_MS) {
-        void kickHomeSnapshotRefresh();
+        void kickHomeSnapshotRefresh().catch(() => {});
       }
 
       res.status(200).json(cached.value);
@@ -746,9 +746,11 @@ export function registerRoutes(app: Express, env: Env) {
 
     if (cached && now - cached.at < 10 * 60_000) {
       if (now - cached.at >= 15_000 && !supplyRefresh) {
-        supplyRefresh = refreshSupply(now).finally(() => {
-          supplyRefresh = null;
-        });
+        supplyRefresh = refreshSupply(now)
+          .catch(() => {})
+          .finally(() => {
+            supplyRefresh = null;
+          });
       }
 
       res.status(200).json(cached.value);
@@ -786,9 +788,11 @@ export function registerRoutes(app: Express, env: Env) {
 
     if (cached && now - cached.at < 2 * 60_000) {
       if (now - cached.at >= 60_000 && !richListRefresh.get(key)) {
-        const refresh = refreshRichList(key, now, page, pageSize, minBalance).finally(() => {
-          richListRefresh.delete(key);
-        });
+        const refresh = refreshRichList(key, now, page, pageSize, minBalance)
+          .catch(() => {})
+          .finally(() => {
+            richListRefresh.delete(key);
+          });
         richListRefresh.set(key, refresh);
       }
 
@@ -826,4 +830,3 @@ export function registerRoutes(app: Express, env: Env) {
 
 
 }
-

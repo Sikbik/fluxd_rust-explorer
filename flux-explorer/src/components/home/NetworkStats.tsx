@@ -173,6 +173,8 @@ export function NetworkStats() {
   const { data: arcaneAdoption, isLoading: arcaneLoading } = useArcaneAdoption();
   const avgBlockTime = dashboardStats?.averages.blockTimeSeconds ?? null;
   const tx24h = dashboardStats?.transactions24h ?? null;
+  const tx24hNormal = dashboardStats?.transactions24hNormal ?? null;
+  const tx24hFluxnode = dashboardStats?.transactions24hFluxnode ?? null;
   const latestHeight = homeSnapshot?.tipHeight ?? null;
   const blockHeightValue = latestHeight !== null && latestHeight !== undefined
     ? latestHeight.toLocaleString()
@@ -314,7 +316,7 @@ export function NetworkStats() {
         delay={300}
       />
 
-      <StatCard
+      <TooltipCard
         title="Transactions (24h)"
         value={tx24h !== null ? tx24h.toLocaleString() : "—"}
         subtitle="Last 24 hours"
@@ -323,6 +325,30 @@ export function NetworkStats() {
         glowColor="#ec4899"
         isLoading={dashboardLoading && tx24h === null}
         delay={350}
+        tooltipContent={
+          tx24hNormal !== null && tx24hFluxnode !== null && (
+            <div className="space-y-2.5 text-sm">
+              <div className="flex items-center justify-between gap-4">
+                <span className="flex items-center gap-2 text-[var(--flux-text-primary)]">
+                  <span className="w-2.5 h-2.5 rounded-full bg-[#ec4899]" />
+                  Normal
+                </span>
+                <span className="font-bold text-[var(--flux-text-primary)]">
+                  {tx24hNormal.toLocaleString()}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <span className="flex items-center gap-2 text-[var(--flux-cyan)]">
+                  <span className="w-2.5 h-2.5 rounded-full bg-[var(--flux-cyan)]" />
+                  FluxNode
+                </span>
+                <span className="font-bold text-[var(--flux-cyan)]">
+                  {tx24hFluxnode.toLocaleString()}
+                </span>
+              </div>
+            </div>
+          )
+        }
       />
     </div>
   );

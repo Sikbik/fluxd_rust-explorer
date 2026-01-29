@@ -112,6 +112,8 @@ export interface DashboardStats {
     blockTimeSeconds: number;
   };
   transactions24h: number;
+  transactions24hNormal?: number;
+  transactions24hFluxnode?: number;
   latestRewards: Array<{
     height: number;
     hash: string;

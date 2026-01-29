@@ -31,15 +31,18 @@ export async function GET() {
       blockHeight?: number;
       transparentSupply?: string;
       shieldedPool?: string;
+      circulatingSupply?: string;
       totalSupply?: string;
       lastUpdate?: string;
       timestamp?: string;
     };
 
     const totalSupplySat = typeof data.totalSupply === 'string' ? data.totalSupply : '0';
-    const circulatingSupplySat = typeof data.transparentSupply === 'string'
-      ? data.transparentSupply
-      : totalSupplySat;
+    const circulatingSupplySat = typeof data.circulatingSupply === 'string'
+      ? data.circulatingSupply
+      : typeof data.transparentSupply === 'string'
+        ? data.transparentSupply
+        : totalSupplySat;
 
     const totalSupply = Number(satoshisToFlux(totalSupplySat).toFixed(8));
     const circulatingSupply = Number(satoshisToFlux(circulatingSupplySat).toFixed(8));
@@ -58,4 +61,3 @@ export async function GET() {
     );
   }
 }
-

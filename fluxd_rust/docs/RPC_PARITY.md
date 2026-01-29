@@ -84,7 +84,7 @@ This file tracks parity targets with the C++ `fluxd` RPC surface. Statuses:
 ## Address index (insight)
 
 - getaddresstxids - Implemented
-- getaddressbalance - Implemented
+- getaddressbalance - Implemented (includes `cumulusCount`/`nimbusCount`/`stratusCount` derived from collateral-sized UTXOs at the current tip)
 - getaddressdeltas - Implemented
 - getaddressutxos - Implemented
 - getaddressmempool - Implemented

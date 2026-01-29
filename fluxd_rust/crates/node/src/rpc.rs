@@ -21,20 +21,35 @@ use sapling_crypto::{
 };
 use serde_json::{json, Number, Value};
 
+struct RichListRow {
+    address: String,
+    script_hash: Hash256,
+    balance: i64,
+    cumulus_count: u32,
+    nimbus_count: u32,
+    stratus_count: u32,
+}
+
 struct RichListCache {
     computed_at: std::time::Instant,
     last_block_height: i64,
     total_supply: i64,
     total_addresses: u64,
-    rows: Vec<(String, i64)>,
+    rows: Vec<RichListRow>,
 }
 
 impl RichListCache {
-    fn to_response(&self, page: u32, page_size: u32, min_balance: i64) -> Value {
+    fn to_response<S: fluxd_storage::KeyValueStore>(
+        &self,
+        chainstate: &ChainState<S>,
+        page: u32,
+        page_size: u32,
+        min_balance: i64,
+    ) -> Value {
         let eligible_addresses = self
             .rows
             .iter()
-            .filter(|(_, balance)| *balance >= min_balance)
+            .filter(|row| row.balance >= min_balance)
             .count() as u64;
 
         let page_u64 = page as u64;
@@ -50,8 +65,8 @@ impl RichListCache {
         let mut remaining_skip = start;
         let mut addresses = Vec::new();
 
-        for (address, balance) in self.rows.iter() {
-            if *balance < min_balance {
+        for row in self.rows.iter() {
+            if row.balance < min_balance {
                 continue;
             }
             if remaining_skip > 0 {
@@ -62,12 +77,40 @@ impl RichListCache {
                 break;
             }
 
-            let rank = start.saturating_add(addresses.len()).saturating_add(1).min(u32::MAX as usize);
+            let mut tx_count = 0u64;
+            let mut last_seen: Option<(u32, u32, Hash256)> = None;
+            let end_height = u32::try_from(self.last_block_height.max(0)).unwrap_or(u32::MAX);
+
+            let mut visitor = |delta: fluxd_chainstate::address_deltas::AddressDeltaEntry| {
+                let key = (delta.height, delta.tx_index, delta.txid);
+                if last_seen != Some(key) {
+                    tx_count = tx_count.saturating_add(1);
+                    last_seen = Some(key);
+                }
+                Ok(())
+            };
+
+            if let Err(err) = chainstate.for_each_address_delta_range(&row.script_hash, 0, end_height, &mut visitor)
+            {
+                log_warn!(
+                    "richlist txCount scan failed for {}: {err}",
+                    &row.address
+                );
+                tx_count = 0;
+            }
+
+            let rank = start
+                .saturating_add(addresses.len())
+                .saturating_add(1)
+                .min(u32::MAX as usize);
             addresses.push(json!({
                 "rank": rank,
-                "address": address,
-                "balance": balance,
-                "txCount": 0,
+                "address": &row.address,
+                "balance": row.balance.to_string(),
+                "txCount": tx_count,
+                "cumulusCount": row.cumulus_count,
+                "nimbusCount": row.nimbus_count,
+                "stratusCount": row.stratus_count,
             }));
         }
 
@@ -75,7 +118,7 @@ impl RichListCache {
             "lastUpdate": current_unix_seconds_u64().to_string(),
             "generatedAt": current_unix_seconds_u64().to_string(),
             "lastBlockHeight": self.last_block_height,
-            "totalSupply": self.total_supply,
+            "totalSupply": self.total_supply.to_string(),
             "totalAddresses": eligible_addresses,
             "page": page,
             "pageSize": page_size,
@@ -134,11 +177,20 @@ fn refresh_richlist_cache<S: fluxd_storage::KeyValueStore>(
 ) -> Result<(), RpcError> {
     let best = chainstate.best_block().map_err(map_internal)?;
     let last_block_height = best.map(|tip| tip.height.max(0) as i64).unwrap_or(0);
+    let best_height = i32::try_from(last_block_height).unwrap_or(i32::MAX);
 
     let utxo_stats = chainstate.utxo_stats_or_compute().map_err(map_internal)?;
     let total_supply = utxo_stats.total_amount;
 
-    let mut balances: HashMap<String, i64> = HashMap::new();
+    struct RichListAccum {
+        balance: i64,
+        script_hash: Hash256,
+        cumulus_count: u32,
+        nimbus_count: u32,
+        stratus_count: u32,
+    }
+
+    let mut balances: HashMap<String, RichListAccum> = HashMap::new();
 
     chainstate
         .for_each_utxo_entry(&mut |entry| {
@@ -151,10 +203,33 @@ fn refresh_richlist_cache<S: fluxd_storage::KeyValueStore>(
                 return Ok(());
             };
 
-            let slot = balances.entry(address).or_insert(0);
-            *slot = slot
+            let Some(script_hash) = fluxd_chainstate::address_index::script_hash(&entry.script_pubkey) else {
+                return Ok(());
+            };
+
+            let slot = balances.entry(address).or_insert(RichListAccum {
+                balance: 0,
+                script_hash,
+                cumulus_count: 0,
+                nimbus_count: 0,
+                stratus_count: 0,
+            });
+
+            slot.balance = slot
+                .balance
                 .checked_add(entry.value)
                 .ok_or_else(|| fluxd_storage::StoreError::Backend("address balance overflow".to_string()))?;
+
+            if let Some(tier) =
+                fluxd_consensus::fluxnode_tier_from_collateral(best_height, entry.value, &chain_params.fluxnode)
+            {
+                match tier {
+                    1 => slot.cumulus_count = slot.cumulus_count.saturating_add(1),
+                    2 => slot.nimbus_count = slot.nimbus_count.saturating_add(1),
+                    3 => slot.stratus_count = slot.stratus_count.saturating_add(1),
+                    _ => {}
+                }
+            }
 
             Ok(())
         })
@@ -162,8 +237,18 @@ fn refresh_richlist_cache<S: fluxd_storage::KeyValueStore>(
 
     let total_addresses = balances.len() as u64;
 
-    let mut rows: Vec<(String, i64)> = balances.into_iter().collect();
-    rows.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    let mut rows: Vec<RichListRow> = balances
+        .into_iter()
+        .map(|(address, accum)| RichListRow {
+            address,
+            script_hash: accum.script_hash,
+            balance: accum.balance,
+            cumulus_count: accum.cumulus_count,
+            nimbus_count: accum.nimbus_count,
+            stratus_count: accum.stratus_count,
+        })
+        .collect();
+    rows.sort_unstable_by(|a, b| b.balance.cmp(&a.balance).then_with(|| a.address.cmp(&b.address)));
 
     let mut guard = richlist_cache()
         .lock()
@@ -1453,7 +1538,12 @@ fn dispatch_method<S: fluxd_storage::KeyValueStore + 'static>(
                 .map_err(|_| map_internal("richlist cache lock poisoned"))?;
             if let Some(existing) = guard.as_ref() {
                 if existing.computed_at.elapsed() < RICHLIST_CACHE_TTL {
-                    return Ok(existing.to_response(page, page_size, min_balance));
+                    return Ok(existing.to_response(
+                        ctx.chainstate.as_ref(),
+                        page,
+                        page_size,
+                        min_balance,
+                    ));
                 }
             }
         }
@@ -1474,7 +1564,12 @@ fn dispatch_method<S: fluxd_storage::KeyValueStore + 'static>(
             .lock()
             .map_err(|_| map_internal("richlist cache lock poisoned"))?;
         if let Some(existing) = guard.as_ref() {
-            return Ok(existing.to_response(page, page_size, min_balance));
+            return Ok(existing.to_response(
+                ctx.chainstate.as_ref(),
+                page,
+                page_size,
+                min_balance,
+            ));
         }
 
         return Err(RpcError::new(RPC_INTERNAL_ERROR, "rich list warming up"));
@@ -1558,6 +1653,7 @@ fn dispatch_method<S: fluxd_storage::KeyValueStore + 'static>(
         "getchaintips" => rpc_getchaintips(chainstate, params),
         "getblocksubsidy" => rpc_getblocksubsidy(chainstate, params, chain_params),
         "getblockhashes" => rpc_getblockhashes(chainstate, params),
+        "gettxstats" => rpc_gettxstats(chainstate, params),
         "createrawtransaction" => rpc_createrawtransaction(chainstate, params, chain_params),
         "decoderawtransaction" => rpc_decoderawtransaction(params, chain_params),
         "decodescript" => rpc_decodescript(params, chain_params),
@@ -5983,8 +6079,42 @@ fn rpc_getblock<S: fluxd_storage::KeyValueStore>(
     let confirmations = confirmations_for_height(chainstate, entry.height, best_height, &hash)?;
     let next_block_hash = next_hash_for_height(chainstate, entry.height, best_height, &hash)?;
 
+    #[derive(Default)]
+    struct FluxnodeTierCounts {
+        cumulus: u32,
+        nimbus: u32,
+        stratus: u32,
+        starting: u32,
+        unknown: u32,
+    }
+
+    let mut regular_tx_count = 0u32;
+    let mut fluxnode_tx_count = 0u32;
+    let mut tier_counts = FluxnodeTierCounts::default();
+
     let mut txs = Vec::with_capacity(block.transactions.len());
     for tx in &block.transactions {
+        match tx.fluxnode.as_ref() {
+            None => regular_tx_count = regular_tx_count.saturating_add(1),
+            Some(fluxnode) => {
+                fluxnode_tx_count = fluxnode_tx_count.saturating_add(1);
+                match fluxnode {
+                    FluxnodeTx::V5(FluxnodeTxV5::Start(_))
+                    | FluxnodeTx::V6(FluxnodeTxV6::Start(_)) => {
+                        tier_counts.starting = tier_counts.starting.saturating_add(1);
+                    }
+                    FluxnodeTx::V5(FluxnodeTxV5::Confirm(confirm))
+                    | FluxnodeTx::V6(FluxnodeTxV6::Confirm(confirm)) => match confirm.benchmark_tier
+                    {
+                        1 => tier_counts.cumulus = tier_counts.cumulus.saturating_add(1),
+                        2 => tier_counts.nimbus = tier_counts.nimbus.saturating_add(1),
+                        3 => tier_counts.stratus = tier_counts.stratus.saturating_add(1),
+                        _ => tier_counts.unknown = tier_counts.unknown.saturating_add(1),
+                    },
+                }
+            }
+        }
+
         if verbosity >= 2 {
             txs.push(tx_to_json(tx, chain_params.network)?);
         } else {
@@ -6006,6 +6136,16 @@ fn rpc_getblock<S: fluxd_storage::KeyValueStore>(
         "bits": format!("{:08x}", block.header.bits),
         "difficulty": difficulty_from_bits(block.header.bits, chain_params).unwrap_or(0.0),
         "chainwork": hex_bytes(&entry.chainwork),
+    });
+
+    result["regularTxCount"] = Value::Number((regular_tx_count as i64).into());
+    result["nodeConfirmationCount"] = Value::Number((fluxnode_tx_count as i64).into());
+    result["tierCounts"] = json!({
+        "cumulus": tier_counts.cumulus,
+        "nimbus": tier_counts.nimbus,
+        "stratus": tier_counts.stratus,
+        "starting": tier_counts.starting,
+        "unknown": tier_counts.unknown,
     });
 
     if block.header.is_pon() {
@@ -12270,7 +12410,7 @@ fn rpc_getrichlist<S: fluxd_storage::KeyValueStore>(
             .map_err(|_| map_internal("richlist cache lock poisoned"))?;
         if let Some(existing) = guard.as_ref() {
             if existing.computed_at.elapsed() < RICHLIST_CACHE_TTL {
-                return Ok(existing.to_response(page, page_size, min_balance));
+                return Ok(existing.to_response(chainstate, page, page_size, min_balance));
             }
         }
     }
@@ -12294,7 +12434,7 @@ fn rpc_getrichlist<S: fluxd_storage::KeyValueStore>(
         .lock()
         .map_err(|_| map_internal("richlist cache lock poisoned"))?;
     if let Some(existing) = guard.as_ref() {
-        return Ok(existing.to_response(page, page_size, min_balance));
+        return Ok(existing.to_response(chainstate, page, page_size, min_balance));
     }
 
     Err(RpcError::new(RPC_INTERNAL_ERROR, "rich list warming up"))
@@ -12660,9 +12800,15 @@ fn rpc_getaddressbalance<S: fluxd_storage::KeyValueStore>(
     let (addresses, _opts) = parse_addresses_param(&params[0])?;
     let address_scripts = decode_address_scripts(addresses, chain_params.network)?;
 
+    let best_height = best_block_height(chainstate)?;
+
     let mut balance = 0i64;
     let mut received = 0i64;
-    for (_address, script_pubkey) in address_scripts {
+    let mut cumulus_count = 0u32;
+    let mut nimbus_count = 0u32;
+    let mut stratus_count = 0u32;
+
+    for (_address, script_pubkey) in address_scripts.iter() {
         let mut visitor = |delta: fluxd_chainstate::address_deltas::AddressDeltaEntry| {
             if delta.satoshis > 0 {
                 received = received.checked_add(delta.satoshis).ok_or_else(|| {
@@ -12675,13 +12821,39 @@ fn rpc_getaddressbalance<S: fluxd_storage::KeyValueStore>(
             Ok(())
         };
         chainstate
-            .for_each_address_delta(&script_pubkey, &mut visitor)
+            .for_each_address_delta(script_pubkey, &mut visitor)
             .map_err(map_internal)?;
+
+        let outpoints = chainstate
+            .address_outpoints(script_pubkey)
+            .map_err(map_internal)?;
+        for outpoint in outpoints {
+            let entry = chainstate
+                .utxo_entry(&outpoint)
+                .map_err(map_internal)?
+                .ok_or_else(|| RpcError::new(RPC_INTERNAL_ERROR, "missing utxo entry"))?;
+
+            if let Some(tier) = fluxd_consensus::fluxnode_tier_from_collateral(
+                best_height,
+                entry.value,
+                &chain_params.fluxnode,
+            ) {
+                match tier {
+                    1 => cumulus_count = cumulus_count.saturating_add(1),
+                    2 => nimbus_count = nimbus_count.saturating_add(1),
+                    3 => stratus_count = stratus_count.saturating_add(1),
+                    _ => {}
+                }
+            }
+        }
     }
 
     Ok(json!({
         "balance": balance,
         "received": received,
+        "cumulusCount": cumulus_count,
+        "nimbusCount": nimbus_count,
+        "stratusCount": stratus_count,
     }))
 }
 
@@ -17419,6 +17591,86 @@ fn rpc_getblockhashes<S: fluxd_storage::KeyValueStore>(
         }
     }
     Ok(Value::Array(out))
+}
+
+fn rpc_gettxstats<S: fluxd_storage::KeyValueStore>(
+    chainstate: &ChainState<S>,
+    params: Vec<Value>,
+) -> Result<Value, RpcError> {
+    if params.len() < 2 || params.len() > 3 {
+        return Err(RpcError::new(
+            RPC_INVALID_PARAMETER,
+            "gettxstats expects 2 or 3 parameters",
+        ));
+    }
+
+    let high = parse_u32(&params[0], "high")?;
+    let low = parse_u32(&params[1], "low")?;
+
+    let mut no_orphans = false;
+    if params.len() > 2 {
+        let options = params[2]
+            .as_object()
+            .ok_or_else(|| RpcError::new(RPC_INVALID_PARAMETER, "options must be an object"))?;
+        if let Some(value) = options.get("noOrphans") {
+            no_orphans = parse_bool(value)?;
+        }
+    }
+
+    let mut entries = chainstate.scan_timestamp_index().map_err(map_internal)?;
+    entries.retain(|(timestamp, _)| *timestamp >= low && *timestamp < high);
+    entries.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+
+    let mut blocks = 0u64;
+    let mut tx_count = 0u64;
+    let mut fluxnode_tx_count = 0u64;
+
+    for (_timestamp, hash) in entries {
+        if no_orphans {
+            let entry = match chainstate.header_entry(&hash).map_err(map_internal)? {
+                Some(entry) => entry,
+                None => continue,
+            };
+            let main_hash = chainstate.height_hash(entry.height).map_err(map_internal)?;
+            if main_hash != Some(hash) {
+                continue;
+            }
+        }
+
+        let Some(block_index) = chainstate
+            .block_index_entry(&hash)
+            .map_err(map_internal)?
+        else {
+            continue;
+        };
+
+        let bytes = chainstate
+            .read_block(block_index.block)
+            .map_err(map_internal)?;
+        let block = Block::consensus_decode(&bytes).map_err(map_internal)?;
+
+        blocks = blocks.saturating_add(1);
+        tx_count = tx_count.saturating_add(block.transactions.len() as u64);
+        fluxnode_tx_count = fluxnode_tx_count.saturating_add(
+            block
+                .transactions
+                .iter()
+                .filter(|tx| tx.fluxnode.is_some())
+                .count() as u64,
+        );
+    }
+
+    let regular_tx_count = tx_count.saturating_sub(fluxnode_tx_count);
+
+    Ok(json!({
+        "low": low,
+        "high": high,
+        "blocks": blocks,
+        "txCount": tx_count,
+        "regularTxCount": regular_tx_count,
+        "fluxnodeTxCount": fluxnode_tx_count,
+        "generatedAt": current_unix_seconds_u64().to_string(),
+    }))
 }
 
 fn network_hashps<S: fluxd_storage::KeyValueStore>(

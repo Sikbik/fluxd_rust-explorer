@@ -100,13 +100,21 @@ export function LatestBlocks() {
                       <span className="font-mono font-bold text-[var(--flux-cyan)] group-hover:flux-text-glow transition-all">
                         #{block.height.toLocaleString()}
                       </span>
-                      <Badge variant="secondary" className="text-xs">
-                        {regularTxCount} txs
+                      <Badge
+                        variant="secondary"
+                        className="text-xs"
+                        title="Normal + coinbase transactions"
+                      >
+                        {regularTxCount} normal
                       </Badge>
                       {nodeCount > 0 && (
-                        <Badge variant="outline" className="text-xs gap-1">
+                        <Badge
+                          variant="outline"
+                          className="text-xs gap-1"
+                          title="FluxNode START + CONFIRM transactions"
+                        >
                           <Server className="h-3 w-3" />
-                          {nodeCount}
+                          {nodeCount} fluxnode
                         </Badge>
                       )}
                     </div>
