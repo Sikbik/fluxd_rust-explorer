@@ -399,10 +399,54 @@
   100% { opacity: 0; transform: translateX(18%) translateY(-50%) scaleX(0.8); }
 }
 
+@keyframes flux-rail-burst-fast {
+  0% { opacity: 0; transform: translateX(-18%) translateY(-50%) scaleX(0.28); }
+  32% { opacity: 1; transform: translateX(2%) translateY(-50%) scaleX(1.16); }
+  100% { opacity: 0; transform: translateX(26%) translateY(-50%) scaleX(0.74); }
+}
+
 @keyframes flux-packet-charge {
   0% { transform: rotate(45deg) scale(0.7); opacity: 0.2; }
   40% { transform: rotate(45deg) scale(1.08); opacity: 1; }
   100% { transform: rotate(45deg) scale(1); opacity: 1; }
+}
+
+@keyframes flux-electric-spike {
+  0% { opacity: 0.1; transform: scaleY(0.5) translateY(-20%); }
+  30% { opacity: 1; transform: scaleY(1.15) translateY(-45%); }
+  55% { opacity: 0.45; transform: scaleY(0.78) translateY(-5%); }
+  100% { opacity: 0.12; transform: scaleY(0.5) translateY(-20%); }
+}
+
+@keyframes flux-river-drift {
+  0% { opacity: 0.22; transform: translateX(-7%) scale(1.02); }
+  50% { opacity: 0.42; transform: translateX(6%) scale(1.08); }
+  100% { opacity: 0.22; transform: translateX(-7%) scale(1.02); }
+}
+
+@keyframes flux-chip-pulse {
+  0%, 100% {
+    box-shadow:
+      0 0 0 rgba(56, 232, 255, 0),
+      0 0 0 rgba(187, 129, 255, 0);
+  }
+  50% {
+    box-shadow:
+      0 0 20px rgba(56, 232, 255, 0.24),
+      0 0 36px rgba(187, 129, 255, 0.18);
+  }
+}
+
+@keyframes flux-center-inbound {
+  0% { opacity: 0; transform: translateY(-50%) translateX(14%) scaleX(0.86); }
+  35% { opacity: 0.95; transform: translateY(-50%) translateX(-2%) scaleX(1.04); }
+  100% { opacity: 0; transform: translateY(-50%) translateX(-14%) scaleX(0.82); }
+}
+
+@keyframes flux-center-outbound {
+  0% { opacity: 0; transform: translateY(-50%) translateX(-14%) scaleX(0.86); }
+  35% { opacity: 0.9; transform: translateY(-50%) translateX(2%) scaleX(1.04); }
+  100% { opacity: 0; transform: translateY(-50%) translateX(14%) scaleX(0.82); }
 }
 
 @layer utilities {

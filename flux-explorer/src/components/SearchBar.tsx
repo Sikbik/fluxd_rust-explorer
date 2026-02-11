@@ -22,7 +22,7 @@ export function SearchBar() {
   };
 
   return (
-    <form onSubmit={handleSearch} className="w-full max-w-2xl">
+    <form onSubmit={handleSearch} className="mx-auto w-full max-w-2xl">
       <div className="relative">
         {/* Glow effect behind the search bar */}
         <div className="absolute -inset-1 bg-gradient-to-r from-[var(--flux-cyan)]/20 via-[var(--flux-purple)]/20 to-[var(--flux-cyan)]/20 rounded-2xl blur-lg opacity-60" />
