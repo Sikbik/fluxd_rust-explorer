@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { SearchBar } from "@/components/SearchBar";
 import { useHomeSnapshot } from "@/lib/api/hooks/useHomeSnapshot";
@@ -10,6 +11,7 @@ import {
   useFluxInstancesCount,
   useFluxNodeCount,
 } from "@/lib/api/hooks/useFluxStats";
+import { getRewardLabel } from "@/lib/block-rewards";
 import type { BlockSummary } from "@/types/flux-api";
 
 type MetricSignal = {
@@ -18,6 +20,42 @@ type MetricSignal = {
   value: string;
   detail: string;
   tint: string;
+};
+
+type PacketStage = "historical" | "current" | "future";
+
+type RailPacket = {
+  key: string;
+  height: number;
+  slot: number;
+  stage: PacketStage;
+  mined: boolean;
+  hash: string | null;
+  timestamp: number | null;
+  totalTx: number;
+  normalTx: number;
+  fluxnodeTx: number;
+};
+
+type TxEstimate = {
+  total: number;
+  normal: number;
+  fluxnode: number;
+};
+
+const SLOT_COUNT = 7;
+const CENTER_SLOT = 3;
+const SHIFT_SETTLE_MS = 32;
+const RAIL_LEFT_BY_SLOT: Record<number, number> = {
+  [-1]: -8,
+  [0]: 8,
+  [1]: 22,
+  [2]: 36,
+  [3]: 50,
+  [4]: 64,
+  [5]: 78,
+  [6]: 92,
+  [7]: 108,
 };
 
 const BLOCK_TONES = [
@@ -41,14 +79,6 @@ const BLOCK_TONES = [
     glow: "rgba(255, 182, 92, 0.35)",
     core: "rgba(52, 34, 22, 0.9)",
   },
-];
-
-const BLOCK_POSITIONS = [
-  { left: 10, top: 50 },
-  { left: 29, top: 43 },
-  { left: 48, top: 54 },
-  { left: 67, top: 44 },
-  { left: 86, top: 52 },
 ];
 
 function formatInteger(value: number | null | undefined): string {
@@ -86,6 +116,125 @@ function createSignalWave(seedText: string): number[] {
   }
 
   return Array.from({ length: 8 }, (_, index) => 24 + ((hash + index * 19) % 56));
+}
+
+function buildBlockMap(blocks: BlockSummary[]): Map<number, BlockSummary> {
+  const blockMap = new Map<number, BlockSummary>();
+  for (const block of blocks) {
+    blockMap.set(block.height, block);
+  }
+  return blockMap;
+}
+
+function estimatePerBlockTransactions(blocks: BlockSummary[]): TxEstimate {
+  if (blocks.length === 0) {
+    return { total: 12, normal: 1, fluxnode: 11 };
+  }
+
+  let totalTx = 0;
+  let totalNormal = 0;
+
+  for (const block of blocks.slice(0, 8)) {
+    const normal = block.regularTxCount ?? block.txlength ?? 1;
+    const fluxnode = block.nodeConfirmationCount ?? Math.max(0, normal - 1);
+    const total = block.txlength ?? normal + fluxnode;
+    totalTx += total;
+    totalNormal += normal;
+  }
+
+  const divisor = Math.max(1, Math.min(8, blocks.length));
+  const estimatedTotal = Math.max(2, Math.round(totalTx / divisor));
+  const estimatedNormal = Math.max(1, Math.round(totalNormal / divisor));
+  const estimatedFluxnode = Math.max(0, estimatedTotal - estimatedNormal);
+
+  return {
+    total: estimatedTotal,
+    normal: estimatedNormal,
+    fluxnode: estimatedFluxnode,
+  };
+}
+
+function slotToLeftPercent(slot: number): number {
+  return RAIL_LEFT_BY_SLOT[slot] ?? 50;
+}
+
+function packetStageForHeight(height: number, tipHeight: number): PacketStage {
+  if (height < tipHeight) return "historical";
+  if (height === tipHeight) return "current";
+  return "future";
+}
+
+function packetFromHeight(
+  height: number,
+  slot: number,
+  tipHeight: number,
+  blockMap: Map<number, BlockSummary>,
+  txEstimate: TxEstimate
+): RailPacket {
+  const block = blockMap.get(height);
+  const stage = packetStageForHeight(height, tipHeight);
+  const fallbackNormal = txEstimate.normal;
+  const fallbackFluxnode = txEstimate.fluxnode;
+  const fallbackTotal = txEstimate.total;
+
+  const normalTx = block?.regularTxCount ?? (stage === "future" ? fallbackNormal : 0);
+  const fluxnodeTx = block?.nodeConfirmationCount ?? (stage === "future" ? fallbackFluxnode : 0);
+  const totalTx = block?.txlength ?? Math.max(normalTx + fluxnodeTx, fallbackTotal);
+
+  return {
+    key: `packet-${height}`,
+    height,
+    slot,
+    stage,
+    mined: Boolean(block),
+    hash: block?.hash ?? null,
+    timestamp: block?.time ?? null,
+    totalTx,
+    normalTx,
+    fluxnodeTx,
+  };
+}
+
+function seedPackets(
+  tipHeight: number,
+  blockMap: Map<number, BlockSummary>,
+  txEstimate: TxEstimate
+): RailPacket[] {
+  const packets: RailPacket[] = [];
+  for (let slot = 0; slot < SLOT_COUNT; slot += 1) {
+    const height = tipHeight + (slot - CENTER_SLOT);
+    packets.push(packetFromHeight(height, slot, tipHeight, blockMap, txEstimate));
+  }
+  return packets;
+}
+
+function hydratePackets(
+  packets: RailPacket[],
+  tipHeight: number,
+  blockMap: Map<number, BlockSummary>,
+  txEstimate: TxEstimate
+): RailPacket[] {
+  return packets
+    .map((packet) => {
+      const refreshed = packetFromHeight(
+        packet.height,
+        packet.slot,
+        tipHeight,
+        blockMap,
+        txEstimate
+      );
+      return {
+        ...packet,
+        stage: refreshed.stage,
+        mined: refreshed.mined,
+        hash: refreshed.hash,
+        timestamp: refreshed.timestamp,
+        totalTx: refreshed.totalTx,
+        normalTx: refreshed.normalTx,
+        fluxnodeTx: refreshed.fluxnodeTx,
+      };
+    })
+    .sort((first, second) => first.slot - second.slot);
 }
 
 function MetricSignalTile({ metric, index }: { metric: MetricSignal; index: number }) {
@@ -136,39 +285,73 @@ function MetricSignalTile({ metric, index }: { metric: MetricSignal; index: numb
   );
 }
 
-function HeroBlockNode({ block, index }: { block: BlockSummary; index: number }) {
-  const tone = BLOCK_TONES[index % BLOCK_TONES.length];
-  const position = BLOCK_POSITIONS[index % BLOCK_POSITIONS.length];
-  const normalTx = block.regularTxCount ?? block.txlength ?? 0;
-  const fluxnodeTx = block.nodeConfirmationCount ?? 0;
-  const totalTx = block.txlength ?? normalTx + fluxnodeTx;
+function RailPacketNode({
+  packet,
+  tipHeight,
+  tipTime,
+  avgBlockTimeSeconds,
+  nowSeconds,
+}: {
+  packet: RailPacket;
+  tipHeight: number | null;
+  tipTime: number | null;
+  avgBlockTimeSeconds: number;
+  nowSeconds: number;
+}) {
+  const tone = BLOCK_TONES[Math.abs(packet.height) % BLOCK_TONES.length];
+  const isCurrent = packet.stage === "current";
+  const isFuture = packet.stage === "future";
+  const nodeSize = isCurrent ? 84 : 70;
+
+  const etaSeconds = (() => {
+    if (!isFuture || tipHeight == null) return null;
+    const blocksAhead = packet.height - tipHeight;
+    if (blocksAhead <= 0) return null;
+    const rawEta = blocksAhead * avgBlockTimeSeconds;
+    if (tipTime == null || !Number.isFinite(tipTime)) {
+      return Math.max(1, Math.round(rawEta));
+    }
+    const elapsed = nowSeconds - tipTime;
+    return Math.max(1, Math.round(rawEta - elapsed));
+  })();
+
+  const packetLabel = isFuture
+    ? `Projected #${packet.height.toLocaleString()}`
+    : `Block #${packet.height.toLocaleString()}`;
 
   return (
     <Link
-      href={`/block/${block.height}`}
-      className="group absolute z-20 -translate-x-1/2 -translate-y-1/2 rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--flux-cyan)] focus-visible:ring-offset-2 focus-visible:ring-offset-[rgba(3,8,20,0.9)]"
+      href={isFuture ? "/blocks" : `/block/${packet.height}`}
+      className="group absolute top-1/2 z-20 -translate-y-1/2 rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--flux-cyan)] focus-visible:ring-offset-2 focus-visible:ring-offset-[rgba(3,8,20,0.9)]"
       style={{
-        left: `${position.left}%`,
-        top: `${position.top}%`,
-        animation: "flux-block-stream 6.6s cubic-bezier(0.32,0.02,0.2,1) infinite",
-        animationDelay: `${index * 360}ms`,
+        left: `${slotToLeftPercent(packet.slot)}%`,
+        opacity: packet.slot < 0 || packet.slot > SLOT_COUNT - 1 ? 0 : 1,
+        transition:
+          "left 760ms cubic-bezier(0.22,1,0.36,1), opacity 480ms cubic-bezier(0.16,1,0.3,1)",
       }}
     >
-      <div className="relative h-16 w-16 sm:h-20 sm:w-20">
+      <div
+        className="relative"
+        style={{ width: `${nodeSize}px`, height: `${nodeSize}px` }}
+      >
         <div
-          className="absolute inset-0 rotate-45 rounded-2xl border transition-transform duration-300 group-hover:scale-110"
+          className="absolute inset-0 rotate-45 rounded-[20px] border transition-transform duration-300 group-hover:scale-110"
           style={{
             borderColor: tone.edge,
             background: `linear-gradient(135deg, rgba(255,255,255,0.18), ${tone.core})`,
-            boxShadow: `0 0 18px ${tone.glow}`,
+            boxShadow: `0 0 20px ${tone.glow}`,
+            animation:
+              packet.slot >= 6 && isFuture
+                ? "flux-packet-charge 900ms cubic-bezier(0.22,1,0.36,1)"
+                : undefined,
           }}
         />
         <div
-          className="absolute inset-[24%] rotate-45 rounded-lg border"
+          className="absolute inset-[23%] rotate-45 rounded-lg border"
           style={{ borderColor: "rgba(255,255,255,0.7)" }}
         />
         <div
-          className="absolute inset-0 rotate-45 rounded-2xl opacity-0 blur-md transition-opacity duration-300 group-hover:opacity-100"
+          className="absolute inset-0 rotate-45 rounded-[20px] opacity-0 blur-md transition-opacity duration-300 group-hover:opacity-100"
           style={{ background: tone.glow }}
         />
         <span
@@ -178,33 +361,31 @@ function HeroBlockNode({ block, index }: { block: BlockSummary; index: number })
       </div>
 
       <div className="mt-2 text-center font-mono text-[11px] text-white/90 drop-shadow-[0_0_8px_rgba(56,232,255,0.35)]">
-        #{block.height.toLocaleString()}
+        #{packet.height.toLocaleString()}
       </div>
 
-      <div className="pointer-events-none absolute left-1/2 top-0 z-30 hidden w-56 -translate-x-1/2 -translate-y-[115%] rounded-2xl border border-white/15 bg-[linear-gradient(160deg,rgba(4,16,34,0.95),rgba(10,12,28,0.92))] p-3 opacity-0 transition-[opacity,transform] duration-300 group-hover:opacity-100 sm:block">
-        <p className="font-mono text-xs text-[var(--flux-cyan)]">
-          Block #{block.height.toLocaleString()}
-        </p>
+      <div className="pointer-events-none absolute left-1/2 top-0 z-30 hidden w-60 -translate-x-1/2 -translate-y-[118%] rounded-2xl border border-white/15 bg-[linear-gradient(160deg,rgba(4,16,34,0.95),rgba(10,12,28,0.92))] p-3 opacity-0 transition-opacity duration-300 group-hover:opacity-100 sm:block">
+        <p className="font-mono text-xs text-[var(--flux-cyan)]">{packetLabel}</p>
         <div className="mt-2 space-y-1.5 text-[11px] text-[var(--flux-text-secondary)]">
           <div className="flex items-center justify-between">
             <span>Total TX</span>
-            <span className="font-mono text-white">{formatInteger(totalTx)}</span>
+            <span className="font-mono text-white">{formatInteger(packet.totalTx)}</span>
           </div>
           <div className="flex items-center justify-between">
             <span>Normal</span>
-            <span className="font-mono text-white">{formatInteger(normalTx)}</span>
+            <span className="font-mono text-white">{formatInteger(packet.normalTx)}</span>
           </div>
           <div className="flex items-center justify-between">
             <span>Fluxnode</span>
-            <span className="font-mono text-white">{formatInteger(fluxnodeTx)}</span>
+            <span className="font-mono text-white">{formatInteger(packet.fluxnodeTx)}</span>
           </div>
           <div className="flex items-center justify-between">
-            <span>Age</span>
-            <span className="font-mono text-white">{formatTimeAgo(block.time)} ago</span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span>Size</span>
-            <span className="font-mono text-white">{(block.size / 1024).toFixed(1)} KB</span>
+            <span>{isFuture ? "ETA" : "Age"}</span>
+            <span className="font-mono text-white">
+              {isFuture
+                ? `${formatInteger(etaSeconds)}s`
+                : `${formatTimeAgo(packet.timestamp)} ago`}
+            </span>
           </div>
         </div>
       </div>
@@ -220,20 +401,129 @@ export function RealtimeSignalHero() {
   const { data: instancesCount } = useFluxInstancesCount();
   const { data: arcaneAdoption } = useArcaneAdoption();
 
-  const latestBlocks = (homeSnapshot?.latestBlocks ?? []).slice(0, 5);
+  const [railPackets, setRailPackets] = useState<RailPacket[]>([]);
+  const [railPulseToken, setRailPulseToken] = useState(0);
+  const [nowSeconds, setNowSeconds] = useState(() => Math.floor(Date.now() / 1000));
+
+  const previousTipHeightRef = useRef<number | null>(null);
+  const settleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    const intervalId = setInterval(() => {
+      setNowSeconds(Math.floor(Date.now() / 1000));
+    }, 1000);
+
+    return () => clearInterval(intervalId);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (settleTimerRef.current) {
+        clearTimeout(settleTimerRef.current);
+      }
+    };
+  }, []);
+
+  const latestBlocks = useMemo(
+    () => homeSnapshot?.latestBlocks ?? [],
+    [homeSnapshot?.latestBlocks]
+  );
+  const blockMap = useMemo(() => buildBlockMap(latestBlocks), [latestBlocks]);
+  const txEstimate = useMemo(
+    () => estimatePerBlockTransactions(latestBlocks),
+    [latestBlocks]
+  );
+
+  const tipHeight = homeSnapshot?.tipHeight ?? latestBlocks[0]?.height ?? null;
+  const tipTime = homeSnapshot?.tipTime ?? latestBlocks[0]?.time ?? null;
+  const avgBlockTimeSeconds = Math.max(5, dashboardStats?.averages.blockTimeSeconds ?? 30);
+
+  useEffect(() => {
+    if (tipHeight == null) {
+      return;
+    }
+
+    const previousTipHeight = previousTipHeightRef.current;
+    if (previousTipHeight == null || railPackets.length === 0) {
+      setRailPackets(seedPackets(tipHeight, blockMap, txEstimate));
+      previousTipHeightRef.current = tipHeight;
+      return;
+    }
+
+    if (tipHeight <= previousTipHeight) {
+      setRailPackets((current) =>
+        hydratePackets(current, tipHeight, blockMap, txEstimate)
+      );
+      previousTipHeightRef.current = tipHeight;
+      return;
+    }
+
+    if (tipHeight - previousTipHeight !== 1) {
+      setRailPackets(seedPackets(tipHeight, blockMap, txEstimate));
+      previousTipHeightRef.current = tipHeight;
+      setRailPulseToken((current) => current + 1);
+      return;
+    }
+
+    setRailPulseToken((current) => current + 1);
+
+    setRailPackets((current) => {
+      const shifted = current.map((packet) => ({
+        ...packet,
+        slot: packet.slot - 1,
+      }));
+      const maxHeight = Math.max(
+        tipHeight + (SLOT_COUNT - CENTER_SLOT - 1),
+        ...shifted.map((packet) => packet.height)
+      );
+      const incomingHeight = maxHeight + 1;
+      const incomingFuture = packetFromHeight(
+        incomingHeight,
+        7,
+        tipHeight,
+        blockMap,
+        txEstimate
+      );
+      incomingFuture.mined = false;
+      incomingFuture.hash = null;
+      incomingFuture.timestamp = null;
+      incomingFuture.stage = "future";
+
+      return [...shifted, incomingFuture];
+    });
+
+    if (settleTimerRef.current) {
+      clearTimeout(settleTimerRef.current);
+    }
+
+    settleTimerRef.current = setTimeout(() => {
+      setRailPackets((current) => {
+        const settled = current
+          .filter((packet) => packet.slot >= 0)
+          .map((packet) => ({
+            ...packet,
+            slot: packet.slot === 7 ? 6 : packet.slot,
+          }));
+        return hydratePackets(settled, tipHeight, blockMap, txEstimate);
+      });
+    }, SHIFT_SETTLE_MS);
+
+    previousTipHeightRef.current = tipHeight;
+  }, [blockMap, railPackets.length, tipHeight, txEstimate]);
+
   const isWarmingUp = homeSnapshot?.warmingUp === true || homeSnapshot?.degraded === true;
   const retryAfter = Math.max(1, homeSnapshot?.retryAfterSeconds ?? 3);
+  const latestReward = homeSnapshot?.dashboard?.latestRewards?.[0] ?? null;
 
   const tx24h = dashboardStats?.transactions24h ?? null;
   const tx24hNormal = dashboardStats?.transactions24hNormal ?? null;
   const tx24hFluxnode = dashboardStats?.transactions24hFluxnode ?? null;
-  const blockTimeSeconds = dashboardStats?.averages.blockTimeSeconds ?? null;
 
   const metrics: MetricSignal[] = [
     {
       id: "height",
       label: "Block Height",
-      value: formatInteger(homeSnapshot?.tipHeight),
+      value: formatInteger(tipHeight),
       detail: "Current chain position",
       tint: "88, 239, 255",
     },
@@ -256,7 +546,9 @@ export function RealtimeSignalHero() {
       label: "ArcaneOS",
       value: arcaneAdoption ? `${arcaneAdoption.percentage.toFixed(1)}%` : "—",
       detail: arcaneAdoption
-        ? `${formatInteger(arcaneAdoption.arcane)} / ${formatInteger(arcaneAdoption.total)} nodes`
+        ? `${formatInteger(arcaneAdoption.arcane)} / ${formatInteger(
+            arcaneAdoption.total
+          )} nodes`
         : "Node rollout mix",
       tint: "255, 182, 92",
     },
@@ -273,14 +565,16 @@ export function RealtimeSignalHero() {
       value: formatCompact(tx24h),
       detail:
         tx24hNormal != null && tx24hFluxnode != null
-          ? `Normal ${formatCompact(tx24hNormal)} · Fluxnode ${formatCompact(tx24hFluxnode)}`
+          ? `Normal ${formatCompact(tx24hNormal)} · Fluxnode ${formatCompact(
+              tx24hFluxnode
+            )}`
           : "Normal + Fluxnode flow",
       tint: "190, 128, 255",
     },
     {
       id: "block-time",
       label: "Avg Block Time",
-      value: blockTimeSeconds != null ? `${blockTimeSeconds.toFixed(1)}s` : "—",
+      value: `${avgBlockTimeSeconds.toFixed(1)}s`,
       detail: "Target 30 seconds",
       tint: "112, 255, 186",
     },
@@ -294,6 +588,7 @@ export function RealtimeSignalHero() {
   ];
 
   const sparkOffsets = [6, 14, 22, 35, 47, 59, 71, 84, 92];
+  const blockFeed = latestBlocks.slice(0, 10);
 
   return (
     <section className="relative isolate overflow-hidden rounded-[34px] border border-white/10 px-4 py-8 sm:px-8 sm:py-10 md:px-10 md:py-12">
@@ -307,8 +602,8 @@ export function RealtimeSignalHero() {
             Flux Explorer
           </h1>
           <p className="mx-auto mt-4 max-w-3xl text-sm text-[var(--flux-text-secondary)] sm:text-base">
-            Observe decentralized compute in real time. Hover live block packets to inspect
-            transaction flow and network cadence as it streams across the PoUW rail.
+            Observe decentralized compute in real time. Future blocks roll in on the right,
+            settle at center once mined, and move left as history.
           </p>
           <div className="mt-6 flex flex-wrap items-center justify-center gap-4 text-[11px] uppercase tracking-[0.22em] text-[var(--flux-text-muted)]">
             <span className="inline-flex items-center gap-2">
@@ -317,7 +612,7 @@ export function RealtimeSignalHero() {
             </span>
             <span className="inline-flex items-center gap-2">
               <span className="h-2 w-2 rounded-full bg-[var(--flux-cyan)] shadow-[0_0_14px_rgba(56,232,255,0.9)]" />
-              Sub-Second Refresh
+              Block Queue Simulation
             </span>
             <span className="inline-flex items-center gap-2">
               <span className="h-2 w-2 rounded-full bg-[var(--flux-purple)] shadow-[0_0_14px_rgba(168,85,247,0.9)]" />
@@ -339,6 +634,15 @@ export function RealtimeSignalHero() {
               className="absolute inset-x-[-12%] top-1/2 h-7 -translate-y-1/2 bg-[linear-gradient(90deg,transparent,rgba(88,239,255,0.45),rgba(238,170,255,0.5),rgba(88,239,255,0.45),transparent)] blur-md"
               style={{ animation: "flux-energy-slide 2.3s linear infinite" }}
             />
+            <div
+              key={railPulseToken}
+              className="pointer-events-none absolute inset-x-[-15%] top-1/2 h-12 -translate-y-1/2 opacity-0 blur-sm"
+              style={{
+                background:
+                  "linear-gradient(90deg, transparent, rgba(200,255,255,0.92), rgba(206,164,255,0.86), transparent)",
+                animation: "flux-rail-burst 850ms ease-out",
+              }}
+            />
             <div className="absolute inset-x-[6%] top-[58%] h-24 rounded-[100%] border-t border-white/25 opacity-65" style={{ animation: "flux-arc-breathe 3.4s ease-in-out infinite" }} />
             <div className="absolute inset-x-[18%] top-[42%] h-20 rounded-[100%] border-t border-white/15 opacity-45" style={{ animation: "flux-arc-breathe 3s ease-in-out infinite 800ms" }} />
 
@@ -357,9 +661,16 @@ export function RealtimeSignalHero() {
               />
             ))}
 
-            {latestBlocks.length > 0 ? (
-              latestBlocks.map((block, index) => (
-                <HeroBlockNode key={block.hash} block={block} index={index} />
+            {railPackets.length > 0 ? (
+              railPackets.map((packet) => (
+                <RailPacketNode
+                  key={packet.key}
+                  packet={packet}
+                  tipHeight={tipHeight}
+                  tipTime={tipTime}
+                  avgBlockTimeSeconds={avgBlockTimeSeconds}
+                  nowSeconds={nowSeconds}
+                />
               ))
             ) : (
               <div className="absolute inset-0 flex items-center justify-center">
@@ -383,6 +694,119 @@ export function RealtimeSignalHero() {
           {metrics.map((metric, index) => (
             <MetricSignalTile key={metric.id} metric={metric} index={index} />
           ))}
+        </div>
+
+        <div className="mt-8 grid gap-4 lg:grid-cols-[1.2fr_1fr]">
+          <div className="rounded-[22px] border border-white/10 bg-[linear-gradient(160deg,rgba(5,18,38,0.86),rgba(8,9,24,0.9))] p-4 sm:p-5">
+            <div className="mb-4 flex items-end justify-between gap-3">
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.28em] text-[var(--flux-text-dim)]">
+                  Stream
+                </p>
+                <h3 className="mt-1 text-lg font-bold text-white sm:text-xl">
+                  Live Block Feed
+                </h3>
+              </div>
+              <Link href="/blocks" className="text-xs uppercase tracking-[0.2em] text-[var(--flux-cyan)]">
+                View All
+              </Link>
+            </div>
+            <div className="space-y-2">
+              {blockFeed.length > 0 ? (
+                blockFeed.map((block) => {
+                  const normalTx = block.regularTxCount ?? block.txlength ?? 0;
+                  const fluxnodeTx = block.nodeConfirmationCount ?? 0;
+                  return (
+                    <Link
+                      key={block.hash}
+                      href={`/block/${block.height}`}
+                      className="group grid grid-cols-[auto_1fr_auto] items-center gap-3 rounded-xl border border-white/10 bg-[rgba(7,13,33,0.7)] px-3 py-2 transition-[border-color,transform] hover:-translate-y-[1px] hover:border-white/30"
+                    >
+                      <span className="h-2.5 w-2.5 rounded-full bg-[var(--flux-cyan)] shadow-[0_0_12px_rgba(56,232,255,0.9)]" />
+                      <div className="min-w-0">
+                        <p className="truncate font-mono text-sm text-white">
+                          #{block.height.toLocaleString()}
+                        </p>
+                        <p className="truncate text-[11px] text-[var(--flux-text-muted)]">
+                          {block.hash.slice(0, 14)}…{block.hash.slice(-8)}
+                        </p>
+                      </div>
+                      <div className="text-right text-[11px] text-[var(--flux-text-secondary)]">
+                        <p>{formatInteger(normalTx)} normal</p>
+                        <p>{formatInteger(fluxnodeTx)} fluxnode</p>
+                      </div>
+                    </Link>
+                  );
+                })
+              ) : (
+                <div className="rounded-xl border border-white/10 bg-[rgba(7,13,33,0.6)] px-4 py-5 text-sm text-[var(--flux-text-muted)]">
+                  Waiting for live block feed…
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="rounded-[22px] border border-white/10 bg-[linear-gradient(160deg,rgba(15,20,45,0.86),rgba(8,9,24,0.9))] p-4 sm:p-5">
+            <div className="mb-4 flex items-end justify-between gap-3">
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.28em] text-[var(--flux-text-dim)]">
+                  Rewards
+                </p>
+                <h3 className="mt-1 text-lg font-bold text-white sm:text-xl">
+                  Reward Dispatch
+                </h3>
+              </div>
+              {latestReward ? (
+                <Link href={`/block/${latestReward.hash}`} className="text-xs uppercase tracking-[0.2em] text-[var(--flux-cyan)]">
+                  View Block
+                </Link>
+              ) : null}
+            </div>
+
+            {latestReward ? (
+              <div className="space-y-3">
+                <div className="rounded-xl border border-white/10 bg-[rgba(6,15,35,0.75)] px-3 py-2">
+                  <p className="font-mono text-sm text-white">
+                    Block #{latestReward.height.toLocaleString()}
+                  </p>
+                  <p className="mt-1 text-xs text-[var(--flux-text-muted)]">
+                    Total reward {latestReward.totalReward.toFixed(2)} FLUX
+                  </p>
+                </div>
+
+                {latestReward.outputs
+                  .filter((output) => output.value > 0)
+                  .slice(0, 5)
+                  .map((output, outputIndex) => {
+                    const rewardLabel = getRewardLabel(output.value, latestReward.height);
+                    const address = output.address ?? "unknown";
+                    return (
+                      <Link
+                        key={`${latestReward.height}-${outputIndex}-${address}`}
+                        href={address === "unknown" ? "/blocks" : `/address/${address}`}
+                        className="group flex items-center justify-between rounded-xl border border-white/10 bg-[rgba(6,12,30,0.68)] px-3 py-2 transition-colors hover:border-white/30"
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate text-[11px] uppercase tracking-[0.18em] text-[var(--flux-text-muted)]">
+                            {rewardLabel.type}
+                          </p>
+                          <p className="truncate font-mono text-xs text-white">
+                            {address.slice(0, 12)}…{address.slice(-8)}
+                          </p>
+                        </div>
+                        <p className="font-mono text-xs text-[var(--flux-cyan)]">
+                          {output.value.toFixed(8)}
+                        </p>
+                      </Link>
+                    );
+                  })}
+              </div>
+            ) : (
+              <div className="rounded-xl border border-white/10 bg-[rgba(6,12,30,0.62)] px-4 py-5 text-sm text-[var(--flux-text-muted)]">
+                Reward data is syncing…
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </section>
