@@ -142,6 +142,16 @@
     mask-image: radial-gradient(ellipse 70% 50% at center, black 20%, transparent 70%);
   }
 
+  .flux-home-grid-motion {
+    background-image:
+      linear-gradient(to right, rgba(102, 242, 255, 0.12) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(102, 242, 255, 0.1) 1px, transparent 1px);
+    background-size: 48px 48px;
+    mask-image: radial-gradient(circle at center, black 28%, transparent 80%);
+    transform-origin: center;
+    animation: flux-grid-pan 18s linear infinite;
+  }
+
   /* Noise texture overlay */
   .flux-noise {
     position: relative;
@@ -342,6 +352,45 @@
 @keyframes flux-spin-slow {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
+}
+
+@keyframes flux-grid-pan {
+  0% { transform: perspective(900px) rotateX(58deg) translateY(6%); }
+  50% { transform: perspective(900px) rotateX(58deg) translateY(9%); }
+  100% { transform: perspective(900px) rotateX(58deg) translateY(6%); }
+}
+
+@keyframes flux-energy-slide {
+  0% { transform: translateX(-22%) translateY(-50%); }
+  100% { transform: translateX(22%) translateY(-50%); }
+}
+
+@keyframes flux-arc-breathe {
+  0%, 100% { opacity: 0.35; transform: scaleX(0.98); }
+  50% { opacity: 0.8; transform: scaleX(1.03); }
+}
+
+@keyframes flux-spark-zap {
+  0%, 100% { opacity: 0.12; transform: translateX(-50%) translateY(-100%) scaleY(0.7); }
+  30% { opacity: 1; transform: translateX(-50%) translateY(-108%) scaleY(1.15); }
+  55% { opacity: 0.35; transform: translateX(-50%) translateY(-96%) scaleY(0.85); }
+}
+
+@keyframes flux-wave-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+
+@keyframes flux-rise-in {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes flux-block-stream {
+  0%, 100% { transform: translateY(0) translateX(0) scale(1) rotate(0deg); }
+  25% { transform: translateY(-5px) translateX(12px) scale(1.03) rotate(1deg); }
+  50% { transform: translateY(4px) translateX(-10px) scale(0.98) rotate(-1deg); }
+  75% { transform: translateY(-3px) translateX(7px) scale(1.01) rotate(1deg); }
 }
 
 @layer utilities {
