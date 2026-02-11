@@ -66,6 +66,10 @@ interface IndexerRichListResponse {
     nimbusCount?: number;
     stratusCount?: number;
   }>;
+  warmingUp?: boolean;
+  degraded?: boolean;
+  retryAfterSeconds?: number;
+  message?: string;
 }
 
 interface IndexerSupplyStatsResponse {
@@ -211,6 +215,10 @@ export async function GET(request: NextRequest) {
         shieldedPool: 0,
         totalAddresses: 0,
         addresses: [],
+        warmingUp: true,
+        degraded: true,
+        retryAfterSeconds: 3,
+        message: "rich list is temporarily unavailable",
       },
       {
         status: 200,
@@ -230,12 +238,7 @@ async function fetchRichListData(minBalance: number): Promise<RichListData> {
   const aggregatedAddresses: RichListAddress[] = [];
   let metadata: IndexerRichListResponse | null = null;
   let page = 1;
-
-  // Start fetching supply stats in parallel with rich list
-  const supplyStatsPromise = fetchSupplyStats().catch((error) => {
-    console.warn("Failed to fetch supply stats, using rich list total:", error);
-    return null;
-  });
+  let supplyStatsPromise: Promise<IndexerSupplyStatsResponse | null> | null = null;
 
   while (
     aggregatedAddresses.length < MAX_ADDRESSES &&
@@ -249,6 +252,31 @@ async function fetchRichListData(minBalance: number): Promise<RichListData> {
 
     if (!metadata) {
       metadata = response;
+
+      if (metadata.warmingUp || metadata.degraded) {
+        const warmingUp = Boolean(metadata.warmingUp);
+        const degraded = metadata.degraded ?? warmingUp;
+
+        return {
+          lastUpdate: metadata.lastUpdate,
+          lastBlockHeight: metadata.lastBlockHeight,
+          totalSupply: satoshisToFlux(metadata.totalSupply || "0"),
+          transparentSupply: satoshisToFlux(metadata.totalSupply || "0"),
+          shieldedPool: 0,
+          totalAddresses: metadata.totalAddresses,
+          addresses: [],
+          warmingUp,
+          degraded,
+          retryAfterSeconds: metadata.retryAfterSeconds ?? 3,
+          message: metadata.message ?? "rich list is warming up",
+        };
+      }
+
+      // Start fetching supply stats in parallel with rich list
+      supplyStatsPromise = fetchSupplyStats().catch((error) => {
+        console.warn("Failed to fetch supply stats, using rich list total:", error);
+        return null;
+      });
     }
 
     const totalSupplyFlux = satoshisToFlux(response.totalSupply || "0");
@@ -285,7 +313,7 @@ async function fetchRichListData(minBalance: number): Promise<RichListData> {
   }
 
   // Wait for supply stats to complete (started earlier in parallel)
-  const supplyStats = await supplyStatsPromise;
+  const supplyStats = supplyStatsPromise ? await supplyStatsPromise : null;
 
   // Use supply stats if available, otherwise fall back to rich list total
   const totalSupplyFlux = supplyStats

@@ -1,5 +1,24 @@
 export type RpcAuthMode = 'cookie' | 'basic' | 'none';
 
+export interface RateLimitPolicyConfig {
+  cost: number;
+  concurrentLimit: number;
+  blockMs: number;
+  penaltyThreshold: number;
+  penaltyWindowMs: number;
+}
+
+export interface RateLimitConfig {
+  capacity: number;
+  refillPerSec: number;
+  stateTtlMs: number;
+  defaultPolicy: RateLimitPolicyConfig;
+  heavyPolicy: RateLimitPolicyConfig;
+  veryHeavyPolicy: RateLimitPolicyConfig;
+  richListCost: number;
+  richListConcurrentLimit: number;
+}
+
 export interface Env {
   port: number;
   fluxdRpcUrl: string;
@@ -8,6 +27,7 @@ export interface Env {
   rpcUser?: string;
   rpcPass?: string;
   fixturesMode: boolean;
+  rateLimit: RateLimitConfig;
 }
 
 function isPrivateAddress(hostname: string): boolean {
@@ -28,6 +48,20 @@ function isPrivateAddress(hostname: string): boolean {
   }
 
   return false;
+}
+
+function readPositiveIntEnv(name: string, defaultValue: number, minValue = 1): number {
+  const raw = process.env[name];
+  if (raw == null || raw.trim() === '') {
+    return defaultValue;
+  }
+
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isInteger(parsed) || parsed < minValue) {
+    throw new Error(`Invalid ${name}: ${raw}`);
+  }
+
+  return parsed;
 }
 
 export function readEnv(): Env {
@@ -81,6 +115,35 @@ export function readEnv(): Env {
     }
   }
 
+  const rateLimit: RateLimitConfig = {
+    capacity: readPositiveIntEnv('RATE_LIMIT_CAPACITY', 240),
+    refillPerSec: readPositiveIntEnv('RATE_LIMIT_REFILL_PER_SEC', 8),
+    stateTtlMs: readPositiveIntEnv('RATE_LIMIT_STATE_TTL_MS', 10 * 60_000),
+    defaultPolicy: {
+      cost: readPositiveIntEnv('RATE_LIMIT_DEFAULT_COST', 1),
+      concurrentLimit: readPositiveIntEnv('RATE_LIMIT_DEFAULT_CONCURRENT_LIMIT', 24),
+      blockMs: readPositiveIntEnv('RATE_LIMIT_DEFAULT_BLOCK_MS', 2_000),
+      penaltyThreshold: readPositiveIntEnv('RATE_LIMIT_DEFAULT_PENALTY_THRESHOLD', 12),
+      penaltyWindowMs: readPositiveIntEnv('RATE_LIMIT_DEFAULT_PENALTY_WINDOW_MS', 45_000),
+    },
+    heavyPolicy: {
+      cost: readPositiveIntEnv('RATE_LIMIT_HEAVY_COST', 8),
+      concurrentLimit: readPositiveIntEnv('RATE_LIMIT_HEAVY_CONCURRENT_LIMIT', 2),
+      blockMs: readPositiveIntEnv('RATE_LIMIT_HEAVY_BLOCK_MS', 3_000),
+      penaltyThreshold: readPositiveIntEnv('RATE_LIMIT_HEAVY_PENALTY_THRESHOLD', 6),
+      penaltyWindowMs: readPositiveIntEnv('RATE_LIMIT_HEAVY_PENALTY_WINDOW_MS', 60_000),
+    },
+    veryHeavyPolicy: {
+      cost: readPositiveIntEnv('RATE_LIMIT_VERY_HEAVY_COST', 12),
+      concurrentLimit: readPositiveIntEnv('RATE_LIMIT_VERY_HEAVY_CONCURRENT_LIMIT', 1),
+      blockMs: readPositiveIntEnv('RATE_LIMIT_VERY_HEAVY_BLOCK_MS', 5_000),
+      penaltyThreshold: readPositiveIntEnv('RATE_LIMIT_VERY_HEAVY_PENALTY_THRESHOLD', 5),
+      penaltyWindowMs: readPositiveIntEnv('RATE_LIMIT_VERY_HEAVY_PENALTY_WINDOW_MS', 90_000),
+    },
+    richListCost: readPositiveIntEnv('RATE_LIMIT_RICHLIST_COST', 6),
+    richListConcurrentLimit: readPositiveIntEnv('RATE_LIMIT_RICHLIST_CONCURRENT_LIMIT', 2),
+  };
+
   return {
     port,
     fluxdRpcUrl,
@@ -89,5 +152,6 @@ export function readEnv(): Env {
     rpcUser,
     rpcPass,
     fixturesMode,
+    rateLimit,
   };
 }

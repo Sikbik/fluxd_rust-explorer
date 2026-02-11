@@ -24,6 +24,10 @@ function formatTimeAgo(timestamp: number): string {
 export function LatestBlocks() {
   const { data: homeSnapshot, isLoading, error } = useHomeSnapshot();
   const blocks = homeSnapshot?.latestBlocks;
+  const isWarmup = homeSnapshot?.warmingUp === true;
+  const isDegraded = homeSnapshot?.degraded === true;
+  const retryAfter = Math.max(1, homeSnapshot?.retryAfterSeconds ?? 3);
+  const statusMessage = homeSnapshot?.message;
   const [, setTick] = useState(0);
 
   // Force re-render every second to update the time display
@@ -83,6 +87,18 @@ export function LatestBlocks() {
               </div>
             </div>
           ))
+        ) : (isWarmup || isDegraded) && (!blocks || blocks.length === 0) ? (
+          <div className="p-4 text-sm text-[var(--flux-text-muted)]">
+            <p className="text-[var(--flux-text-secondary)]">
+              {statusMessage ??
+                (isWarmup
+                  ? "Latest blocks are warming up."
+                  : "Latest blocks are temporarily unavailable.")}
+            </p>
+            <p className="mt-1 text-xs">
+              Retrying every {retryAfter}s.
+            </p>
+          </div>
         ) : (
           blocks?.map((block, index) => {
             const nodeCount = block.nodeConfirmationCount ?? 0;

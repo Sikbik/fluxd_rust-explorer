@@ -100,6 +100,11 @@ export interface HomeSnapshot {
   tipTime: number | null;
   latestBlocks: BlockSummary[];
   dashboard: DashboardStats | null;
+  warmingUp?: boolean;
+  degraded?: boolean;
+  retryAfterSeconds?: number;
+  message?: string;
+  generatedAt?: string;
 }
 
 export interface DashboardStats {

@@ -66,33 +66,14 @@ const rateState = new Map<string, RateState>();
 const inFlightByIpPath = new Map<string, number>();
 const bannedIps = new Map<string, { untilMs: number; reason: string }>();
 
-const RATE_LIMIT_CAPACITY = 240;
-const RATE_LIMIT_REFILL_PER_SEC = 8;
-const RATE_LIMIT_STATE_TTL_MS = 10 * 60_000;
-
-const DEFAULT_POLICY: RatePolicy = {
-  cost: 1,
-  concurrentLimit: 24,
-  blockMs: 2_000,
-  penaltyThreshold: 12,
-  penaltyWindowMs: 45_000,
-};
-
-const HEAVY_POLICY: RatePolicy = {
-  cost: 8,
-  concurrentLimit: 2,
-  blockMs: 3_000,
-  penaltyThreshold: 6,
-  penaltyWindowMs: 60_000,
-};
-
-const VERY_HEAVY_POLICY: RatePolicy = {
-  cost: 12,
-  concurrentLimit: 1,
-  blockMs: 5_000,
-  penaltyThreshold: 5,
-  penaltyWindowMs: 90_000,
-};
+const RATE_LIMIT_CAPACITY = env.rateLimit.capacity;
+const RATE_LIMIT_REFILL_PER_SEC = env.rateLimit.refillPerSec;
+const RATE_LIMIT_STATE_TTL_MS = env.rateLimit.stateTtlMs;
+const DEFAULT_POLICY: RatePolicy = env.rateLimit.defaultPolicy;
+const HEAVY_POLICY: RatePolicy = env.rateLimit.heavyPolicy;
+const VERY_HEAVY_POLICY: RatePolicy = env.rateLimit.veryHeavyPolicy;
+const RATE_LIMIT_RICHLIST_COST = env.rateLimit.richListCost;
+const RATE_LIMIT_RICHLIST_CONCURRENT_LIMIT = env.rateLimit.richListConcurrentLimit;
 
 let lastSweptMs = Date.now();
 
@@ -149,7 +130,11 @@ function ratePolicyFor(method: string, normalizedPath: string): RatePolicy {
   }
 
   if (normalizedPath === '/api/v1/richlist') {
-    return { ...HEAVY_POLICY, cost: 6, concurrentLimit: 2 };
+    return {
+      ...HEAVY_POLICY,
+      cost: RATE_LIMIT_RICHLIST_COST,
+      concurrentLimit: RATE_LIMIT_RICHLIST_CONCURRENT_LIMIT,
+    };
   }
 
   return DEFAULT_POLICY;
@@ -289,6 +274,21 @@ registerRoutes(app, env);
 app.listen(env.port, '0.0.0.0', () => {
   // eslint-disable-next-line no-console
   console.log(`explorer-api listening on 0.0.0.0:${env.port}`);
+  console.log(
+    JSON.stringify({
+      ts: new Date().toISOString(),
+      rateLimit: {
+        capacity: RATE_LIMIT_CAPACITY,
+        refillPerSec: RATE_LIMIT_REFILL_PER_SEC,
+        stateTtlMs: RATE_LIMIT_STATE_TTL_MS,
+        defaultPolicy: DEFAULT_POLICY,
+        heavyPolicy: HEAVY_POLICY,
+        veryHeavyPolicy: VERY_HEAVY_POLICY,
+        richListCost: RATE_LIMIT_RICHLIST_COST,
+        richListConcurrentLimit: RATE_LIMIT_RICHLIST_CONCURRENT_LIMIT,
+      },
+    })
+  );
 
   let warmupInterval: NodeJS.Timeout | null = null;
 

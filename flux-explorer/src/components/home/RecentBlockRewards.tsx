@@ -11,6 +11,10 @@ export function RecentBlockRewards() {
   const { data: homeSnapshot, isLoading } = useHomeSnapshot();
   const latestReward = homeSnapshot?.dashboard?.latestRewards?.[0] ?? null;
   const tipHeight = homeSnapshot?.tipHeight ?? null;
+  const isWarmup = homeSnapshot?.warmingUp === true;
+  const isDegraded = homeSnapshot?.degraded === true;
+  const retryAfter = Math.max(1, homeSnapshot?.retryAfterSeconds ?? 3);
+  const statusMessage = homeSnapshot?.message;
 
   const showReward = latestReward != null;
   const rewardStatus =
@@ -136,6 +140,16 @@ export function RecentBlockRewards() {
                 );
               })}
             </div>
+          </div>
+        ) : (isWarmup || isDegraded) ? (
+          <div className="text-center text-sm text-[var(--flux-text-muted)] py-8">
+            <p className="text-[var(--flux-text-secondary)]">
+              {statusMessage ??
+                (isWarmup
+                  ? "Block rewards are warming up."
+                  : "Block rewards are temporarily unavailable.")}
+            </p>
+            <p className="text-xs mt-1">Retrying every {retryAfter}s.</p>
           </div>
         ) : (
           <div className="text-center text-sm text-[var(--flux-text-muted)] py-8">

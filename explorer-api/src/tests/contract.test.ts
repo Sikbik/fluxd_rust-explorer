@@ -23,6 +23,34 @@ test('contract: registers core api/v1 routes', async () => {
     fluxdRpcUrl: 'http://fluxd:16124',
     rpcAuthMode: 'none',
     fixturesMode: true,
+    rateLimit: {
+      capacity: 240,
+      refillPerSec: 8,
+      stateTtlMs: 10 * 60_000,
+      defaultPolicy: {
+        cost: 1,
+        concurrentLimit: 24,
+        blockMs: 2_000,
+        penaltyThreshold: 12,
+        penaltyWindowMs: 45_000,
+      },
+      heavyPolicy: {
+        cost: 8,
+        concurrentLimit: 2,
+        blockMs: 3_000,
+        penaltyThreshold: 6,
+        penaltyWindowMs: 60_000,
+      },
+      veryHeavyPolicy: {
+        cost: 12,
+        concurrentLimit: 1,
+        blockMs: 5_000,
+        penaltyThreshold: 5,
+        penaltyWindowMs: 90_000,
+      },
+      richListCost: 6,
+      richListConcurrentLimit: 2,
+    },
   });
 
   const expected = [

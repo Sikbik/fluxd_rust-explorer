@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import Link from "next/link";
 import { Loader2, AlertCircle, TrendingUp, Lock, Server } from "lucide-react";
 import {
@@ -34,6 +34,10 @@ interface RichListResponse {
   circulatingSupply?: number;
   totalAddresses: number;
   addresses: RichListAddress[];
+  warmingUp?: boolean;
+  degraded?: boolean;
+  retryAfterSeconds?: number;
+  message?: string;
 }
 
 interface RichListApiResponse extends RichListResponse {
@@ -53,11 +57,7 @@ export function RichListTable() {
   const [addresses, setAddresses] = useState<RichListAddress[]>([]);
   const [excludeSwapPools, setExcludeSwapPools] = useState(true);
 
-  useEffect(() => {
-    fetchRichList();
-  }, []);
-
-  const fetchRichList = async () => {
+  const fetchRichList = useCallback(async () => {
     setLoading(true);
     setError(null);
 
@@ -94,7 +94,7 @@ export function RichListTable() {
         circulatingSupply = parseFloat(supplyData.circulatingSupply);
       }
 
-      setMetadata({
+      const nextMetadata: RichListResponse = {
         lastUpdate: richListData.lastUpdate,
         lastBlockHeight: richListData.lastBlockHeight,
         totalSupply: richListData.totalSupply,
@@ -103,7 +103,13 @@ export function RichListTable() {
         circulatingSupply,
         totalAddresses: richListData.totalAddresses,
         addresses: annotated,
-      });
+        warmingUp: richListData.warmingUp,
+        degraded: richListData.degraded,
+        retryAfterSeconds: richListData.retryAfterSeconds,
+        message: richListData.message,
+      };
+
+      setMetadata(nextMetadata);
       setAddresses(annotated);
       setCurrentPage(1);
     } catch (err) {
@@ -114,7 +120,24 @@ export function RichListTable() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    fetchRichList();
+  }, [fetchRichList]);
+
+  useEffect(() => {
+    if (!metadata) return;
+    if (!metadata.warmingUp && !metadata.degraded) return;
+    if (loading) return;
+
+    const retryMs = Math.max(1, metadata.retryAfterSeconds ?? 3) * 1000;
+    const timeoutId = setTimeout(() => {
+      fetchRichList();
+    }, retryMs);
+
+    return () => clearTimeout(timeoutId);
+  }, [metadata, loading, fetchRichList]);
 
   const formatBalance = (balance: number): string => {
     return balance.toLocaleString("en-US", {
@@ -243,8 +266,41 @@ export function RichListTable() {
     );
   }
 
-  if (!metadata || addresses.length === 0) {
+  if (!metadata) {
     return null;
+  }
+
+  if ((metadata.warmingUp || metadata.degraded) && addresses.length === 0) {
+    const retryAfter = Math.max(1, metadata.retryAfterSeconds ?? 3);
+    const statusLabel = metadata.warmingUp ? "warming up" : "temporarily degraded";
+
+    return (
+      <Alert className="max-w-3xl mx-auto">
+        <AlertCircle className="h-4 w-4" />
+        <AlertDescription className="space-y-3">
+          <div>
+            {metadata.message ?? `Rich list is ${statusLabel}. Data will appear shortly.`}
+          </div>
+          <div className="text-xs text-muted-foreground">
+            Last known block: #{metadata.lastBlockHeight.toLocaleString()}.
+            Retrying every {retryAfter}s.
+          </div>
+          <Button variant="outline" size="sm" onClick={() => fetchRichList()} disabled={loading}>
+            {loading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
+            Retry now
+          </Button>
+        </AlertDescription>
+      </Alert>
+    );
+  }
+
+  if (addresses.length === 0) {
+    return (
+      <Alert className="max-w-3xl mx-auto">
+        <AlertCircle className="h-4 w-4" />
+        <AlertDescription>No rich list data is available yet.</AlertDescription>
+      </Alert>
+    );
   }
 
   return (

@@ -29,6 +29,10 @@ export interface RichListData {
   shieldedPool?: number; // Shielded pool balance
   totalAddresses: number;
   addresses: RichListAddress[];
+  warmingUp?: boolean;
+  degraded?: boolean;
+  retryAfterSeconds?: number;
+  message?: string;
 }
 
 export interface RichListMetadata {
