@@ -167,7 +167,21 @@ async function proxyRequest(
       }
     }
 
-    const timeoutMs = path.startsWith('api/v1/addresses/') ? 30_000 : 15_000;
+    const isAddressTxRoute = /^api\/v1\/addresses\/[^/]+\/transactions$/.test(path);
+    const limitParam = request.nextUrl.searchParams.get('limit');
+    const limit = limitParam != null ? Number(limitParam) : NaN;
+    const isLargeAddressExportRequest =
+      isAddressTxRoute &&
+      request.nextUrl.searchParams.has('fromTimestamp') &&
+      request.nextUrl.searchParams.has('toTimestamp') &&
+      Number.isFinite(limit) &&
+      limit >= 200;
+
+    const timeoutMs = isLargeAddressExportRequest
+      ? 90_000
+      : path.startsWith('api/v1/addresses/')
+        ? 30_000
+        : 15_000;
 
     const response = await fetch(targetUrl, {
       ...options,

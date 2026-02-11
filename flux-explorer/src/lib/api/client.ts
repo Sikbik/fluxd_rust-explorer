@@ -197,6 +197,13 @@ export class FluxAPI {
     return FluxIndexerAPI.getAddressTransactions(addresses, params);
   }
 
+  static async getAddressTransactionsForExport(
+    addresses: string[],
+    params?: { from?: number; to?: number; fromBlock?: number; toBlock?: number; fromTimestamp?: number; toTimestamp?: number; cursorHeight?: number; cursorTxIndex?: number; cursorTxid?: string }
+  ): Promise<AddressTransactionsPage> {
+    return FluxIndexerAPI.getAddressTransactionsForExport(addresses, params);
+  }
+
   /**
    * Fetch aggregated dashboard stats
    */

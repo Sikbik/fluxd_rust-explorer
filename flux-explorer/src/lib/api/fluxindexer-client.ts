@@ -5,7 +5,7 @@
  * Custom implementation for Flux blockchain indexing
  */
 
-import ky from "ky";
+import ky, { type Options } from "ky";
 import type {
   Block,
   BlockSummary,
@@ -217,6 +217,11 @@ interface FluxIndexerAddressTransactionsResponse {
     txIndex: number;
     txid: string;
   };
+}
+
+interface AddressTransactionsRequestOptions {
+  timeoutMs?: number;
+  retryLimit?: number;
 }
 
 interface FluxIndexerUtxoResponse {
@@ -819,7 +824,7 @@ export class FluxIndexerAPI {
    *   - fromBlock: Starting block height (for date filtering)
    *   - toBlock: Ending block height (for date filtering)
    */
-  static async getAddressTransactions(
+  private static async fetchAddressTransactions(
     addresses: string[],
     params?: {
       from?: number;
@@ -831,7 +836,8 @@ export class FluxIndexerAPI {
       cursorHeight?: number;
       cursorTxIndex?: number;
       cursorTxid?: string;
-    }
+    },
+    requestOptions?: AddressTransactionsRequestOptions
   ): Promise<AddressTransactionsPage> {
     try {
       // FluxIndexer API uses single address with pagination
@@ -872,8 +878,20 @@ export class FluxIndexerAPI {
         searchParams.toTimestamp = params.toTimestamp.toString();
       }
 
+      const requestConfig: Options = { searchParams };
+      if (requestOptions?.timeoutMs != null) {
+        requestConfig.timeout = requestOptions.timeoutMs;
+      }
+      if (requestOptions?.retryLimit != null) {
+        requestConfig.retry = {
+          limit: requestOptions.retryLimit,
+          methods: ["get"],
+          statusCodes: [408, 413, 429, 500, 502, 503, 504],
+        };
+      }
+
       const response = await api()
-        .get(`api/v1/addresses/${address}/transactions`, { searchParams })
+        .get(`api/v1/addresses/${address}/transactions`, requestConfig)
         .json<FluxIndexerAddressTransactionsResponse>();
 
       const filteredTotal = response.filteredTotal ?? response.total ?? 0;
@@ -934,6 +952,43 @@ export class FluxIndexerAPI {
         error
       );
     }
+  }
+
+  static async getAddressTransactions(
+    addresses: string[],
+    params?: {
+      from?: number;
+      to?: number;
+      fromBlock?: number;
+      toBlock?: number;
+      fromTimestamp?: number;
+      toTimestamp?: number;
+      cursorHeight?: number;
+      cursorTxIndex?: number;
+      cursorTxid?: string;
+    }
+  ): Promise<AddressTransactionsPage> {
+    return this.fetchAddressTransactions(addresses, params);
+  }
+
+  static async getAddressTransactionsForExport(
+    addresses: string[],
+    params?: {
+      from?: number;
+      to?: number;
+      fromBlock?: number;
+      toBlock?: number;
+      fromTimestamp?: number;
+      toTimestamp?: number;
+      cursorHeight?: number;
+      cursorTxIndex?: number;
+      cursorTxid?: string;
+    }
+  ): Promise<AddressTransactionsPage> {
+    return this.fetchAddressTransactions(addresses, params, {
+      timeoutMs: 90_000,
+      retryLimit: 5,
+    });
   }
 
   /**

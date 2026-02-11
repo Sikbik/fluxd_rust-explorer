@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Download, FileJson } from "lucide-react";
 import { AddressTransactionSummary } from "@/types/flux-api";
-import { FluxAPI } from "@/lib/api/client";
+import { FluxAPI, FluxAPIError } from "@/lib/api/client";
 import { batchGetFluxPrices } from "@/lib/api/price-history-client";
 import { DateRange } from "react-day-picker";
 import { DateRangePicker } from "@/components/ui/date-range-picker";
@@ -129,8 +129,19 @@ export function TransactionExportDialog({
           } catch (err) {
             lastErr = err;
             if (attempt < attempts) {
+              const statusCode =
+                err instanceof FluxAPIError
+                  ? err.statusCode
+                  : undefined;
+              const retryDelayMs =
+                statusCode === 429
+                  ? 3_000 * attempt
+                  : statusCode && statusCode >= 500
+                    ? 1_000 * attempt
+                    : 250 * attempt;
+
               setCurrentStatus(`${label} (retry ${attempt}/${attempts - 1})...`);
-              await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
+              await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
               continue;
             }
           }
@@ -148,7 +159,7 @@ export function TransactionExportDialog({
         // Fetch batch from API using cursor-based pagination
         const data = await fetchWithRetry(
           () =>
-            FluxAPI.getAddressTransactions([address], {
+            FluxAPI.getAddressTransactionsForExport([address], {
           from: 0,
           to: batchSize,
           fromTimestamp,
@@ -213,8 +224,8 @@ export function TransactionExportDialog({
 
       // Fetch prices in parallel batches for speed
       const priceMap = new Map<number, number | null>();
-      const priceChunkSize = 1000; // Max per API call
-      const parallelBatches = 5; // Fetch 5 batches in parallel
+      const priceChunkSize = 2000;
+      const parallelBatches = 2;
 
       const chunks: number[][] = [];
       for (let i = 0; i < uniqueTimestamps.length; i += priceChunkSize) {

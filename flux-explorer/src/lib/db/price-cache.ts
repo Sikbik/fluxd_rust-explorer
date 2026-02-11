@@ -192,6 +192,91 @@ export function getCachedPriceByTimestamp(timestamp: number): number | null {
 }
 
 /**
+ * Get cached prices for multiple timestamps with a single range query.
+ * Finds the closest cached hour within 2 hours (7200s) for each timestamp.
+ */
+export function getCachedPricesByTimestamps(timestamps: number[]): Map<number, number | null> {
+  const results = new Map<number, number | null>();
+  if (timestamps.length === 0) return results;
+
+  const normalized = Array.from(
+    new Set(
+      timestamps
+        .filter((ts) => Number.isFinite(ts) && ts > 0)
+        .map((ts) => Math.trunc(ts))
+    )
+  );
+
+  if (normalized.length === 0) return results;
+
+  const database = initPriceCache();
+
+  let minTimestamp = normalized[0];
+  let maxTimestamp = normalized[0];
+  for (let i = 1; i < normalized.length; i += 1) {
+    const ts = normalized[i];
+    if (ts < minTimestamp) minTimestamp = ts;
+    if (ts > maxTimestamp) maxTimestamp = ts;
+  }
+
+  const rows = database.prepare(`
+    SELECT timestamp, price_usd
+    FROM price_history
+    WHERE timestamp >= ? AND timestamp <= ?
+    ORDER BY timestamp ASC
+  `).all(minTimestamp - 7200, maxTimestamp + 7200) as Array<{ timestamp: number; price_usd: number }>;
+
+  if (rows.length === 0) {
+    for (const ts of normalized) {
+      results.set(ts, null);
+    }
+    return results;
+  }
+
+  const rowTimestamps = rows.map((row) => row.timestamp);
+
+  const lowerBound = (target: number): number => {
+    let left = 0;
+    let right = rowTimestamps.length;
+    while (left < right) {
+      const mid = Math.floor((left + right) / 2);
+      if (rowTimestamps[mid] < target) {
+        left = mid + 1;
+      } else {
+        right = mid;
+      }
+    }
+    return left;
+  };
+
+  for (const ts of normalized) {
+    const idx = lowerBound(ts);
+    let bestDiff = Number.POSITIVE_INFINITY;
+    let bestPrice: number | null = null;
+
+    if (idx < rows.length) {
+      const diff = Math.abs(rows[idx].timestamp - ts);
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        bestPrice = rows[idx].price_usd;
+      }
+    }
+
+    if (idx > 0) {
+      const diff = Math.abs(rows[idx - 1].timestamp - ts);
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        bestPrice = rows[idx - 1].price_usd;
+      }
+    }
+
+    results.set(ts, bestDiff <= 7200 ? bestPrice : null);
+  }
+
+  return results;
+}
+
+/**
  * Batch store hourly prices
  *
  * @param prices - Array of [timestamp, price] tuples

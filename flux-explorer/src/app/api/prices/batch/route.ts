@@ -6,7 +6,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { getCachedPriceByTimestamp } from "@/lib/db/price-cache";
+import { getCachedPricesByTimestamps } from "@/lib/db/price-cache";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -35,38 +35,47 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const hasInvalidTimestamp = timestamps.some((ts) => !Number.isFinite(ts) || ts <= 0);
+    if (hasInvalidTimestamp) {
+      return NextResponse.json(
+        { error: "All timestamps must be positive finite numbers" },
+        { status: 400, headers: corsHeaders }
+      );
+    }
+
     // Security: Enforce maximum array size to prevent DoS
-    const MAX_TIMESTAMPS = 1000;
-    if (timestamps.length > MAX_TIMESTAMPS) {
+    const normalizedTimestamps = Array.from(
+      new Set(
+        timestamps
+          .filter((ts) => Number.isFinite(ts) && ts > 0)
+          .map((ts) => Math.trunc(ts))
+      )
+    );
+
+    const MAX_TIMESTAMPS = 2000;
+    if (normalizedTimestamps.length > MAX_TIMESTAMPS) {
       return NextResponse.json(
         { error: `Maximum ${MAX_TIMESTAMPS} timestamps allowed per request` },
         { status: 400, headers: corsHeaders }
       );
     }
 
-    // Security: Validate each timestamp is a valid positive number
-    for (const ts of timestamps) {
-      if (!Number.isFinite(ts) || ts <= 0) {
-        return NextResponse.json(
-          { error: "All timestamps must be positive finite numbers" },
-          { status: 400, headers: corsHeaders }
-        );
-      }
+    if (normalizedTimestamps.length === 0) {
+      return NextResponse.json({ prices: {} }, { headers: corsHeaders });
     }
 
-    // Lookup prices from cache (finds closest within 2 hours)
     const results: Record<number, number | null> = {};
-
-    for (const ts of timestamps) {
-      results[ts] = getCachedPriceByTimestamp(ts);
+    const priceMap = getCachedPricesByTimestamps(normalizedTimestamps);
+    for (const ts of normalizedTimestamps) {
+      results[ts] = priceMap.get(ts) ?? null;
     }
 
     // Count how many prices were found
     const found = Object.values(results).filter(p => p !== null).length;
-    const missing = timestamps.length - found;
+    const missing = normalizedTimestamps.length - found;
 
     if (missing > 0) {
-      console.warn(`Price lookup: Found ${found}/${timestamps.length} prices (${missing} missing)`);
+      console.warn(`Price lookup: Found ${found}/${normalizedTimestamps.length} prices (${missing} missing)`);
       console.warn(`Missing prices may indicate price database needs updating. Run: npm run update-prices`);
     }
 
