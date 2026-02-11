@@ -109,6 +109,11 @@ function normalizePath(path: string): string {
 
 const STARTUP_GRACE_PERIOD_MS = 2 * 60_000;
 const WARMUP_RETRY_AFTER_SECONDS = 3;
+const RICH_LIST_FRESH_MS = 60_000;
+const RICH_LIST_MAX_AGE_MS = 2 * 60_000;
+const RICH_LIST_WARMUP_MAX_AGE_MS = 15_000;
+const RICH_LIST_WARMUP_MIN_REFRESH_MS = 1_000;
+const RICH_LIST_WARMUP_MAX_REFRESH_MS = 10_000;
 
 function isStartupGracePeriod(nowMs: number): boolean {
   return nowMs - metricsState.startedAtMs <= STARTUP_GRACE_PERIOD_MS;
@@ -125,6 +130,30 @@ function looksLikeWarmupError(message: string): boolean {
     normalized.includes('headers timeout') ||
     normalized.includes('connection reset')
   );
+}
+
+function isRichListWarmupPayload(value: unknown): boolean {
+  const payload = value as { warmingUp?: unknown; degraded?: unknown };
+  return payload?.warmingUp === true || payload?.degraded === true;
+}
+
+function getRichListRefreshIntervalMs(value: unknown): number {
+  if (!isRichListWarmupPayload(value)) {
+    return RICH_LIST_FRESH_MS;
+  }
+
+  const payload = value as { retryAfterSeconds?: unknown };
+  const retryAfterSeconds = toInt(payload?.retryAfterSeconds) ?? WARMUP_RETRY_AFTER_SECONDS;
+  const retryAfterMs = retryAfterSeconds * 1000;
+
+  return Math.max(
+    RICH_LIST_WARMUP_MIN_REFRESH_MS,
+    Math.min(RICH_LIST_WARMUP_MAX_REFRESH_MS, retryAfterMs)
+  );
+}
+
+function getRichListMaxAgeMs(value: unknown): number {
+  return isRichListWarmupPayload(value) ? RICH_LIST_WARMUP_MAX_AGE_MS : RICH_LIST_MAX_AGE_MS;
 }
 
 function buildHomeWarmupPayload(
@@ -890,71 +919,75 @@ export function registerRoutes(app: Express, env: Env) {
   let richListCache = new Map<string, { at: number; value: unknown }>();
   let richListRefresh = new Map<string, Promise<void>>();
 
-  async function refreshRichList(key: string, now: number, page: number, pageSize: number, minBalance: number): Promise<void> {
+  async function refreshRichList(key: string, page: number, pageSize: number, minBalance: number): Promise<void> {
     const response = await getRichList(env, page, pageSize, minBalance);
-    richListCache.set(key, { at: now, value: response });
+    richListCache.set(key, { at: Date.now(), value: response });
   }
 
   app.get('/api/v1/richlist', async (req: Request, res: Response) => {
     res.setHeader('Cache-Control', 'public, max-age=0, s-maxage=60, stale-while-revalidate=300');
     const now = Date.now();
-      const page = clampInt(toInt(req.query.page) ?? 1, 1, 1000);
-      const pageSize = clampInt(toInt(req.query.pageSize) ?? 100, 1, 1000);
-      const minBalance = Math.max(0, toInt(req.query.minBalance) ?? 1);
-
-
+    const page = clampInt(toInt(req.query.page) ?? 1, 1, 1000);
+    const pageSize = clampInt(toInt(req.query.pageSize) ?? 100, 1, 1000);
+    const minBalance = Math.max(0, toInt(req.query.minBalance) ?? 1);
 
     const key = `${page}:${pageSize}:${minBalance}`;
     const cached = richListCache.get(key);
 
-    if (cached && now - cached.at < 2 * 60_000) {
-      if (now - cached.at >= 60_000 && !richListRefresh.get(key)) {
-        const refresh = refreshRichList(key, now, page, pageSize, minBalance)
-          .catch(() => {})
-          .finally(() => {
-            richListRefresh.delete(key);
-          });
-        richListRefresh.set(key, refresh);
-      }
+    if (cached) {
+      const ageMs = now - cached.at;
+      const maxAgeMs = getRichListMaxAgeMs(cached.value);
+      const refreshAfterMs = getRichListRefreshIntervalMs(cached.value);
 
-      res.status(200).json(cached.value);
-      return;
+      if (ageMs < maxAgeMs) {
+        if (ageMs >= refreshAfterMs && !richListRefresh.get(key)) {
+          const refresh = refreshRichList(key, page, pageSize, minBalance)
+            .catch(() => {})
+            .finally(() => {
+              richListRefresh.delete(key);
+            });
+          richListRefresh.set(key, refresh);
+        }
+
+        res.status(200).json(cached.value);
+        return;
+      }
     }
 
-     try {
-       await refreshRichList(key, now, page, pageSize, minBalance);
-       res.status(200).json(richListCache.get(key)?.value);
-     } catch (error) {
-       const message = error instanceof Error ? error.message : 'Unknown error';
-       const cachedResponse = richListCache.get(key)?.value;
-       if (cachedResponse) {
-         res.status(200).json(cachedResponse);
-         return;
-       }
+    try {
+      await refreshRichList(key, page, pageSize, minBalance);
+      res.status(200).json(richListCache.get(key)?.value);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      const cachedResponse = richListCache.get(key)?.value;
+      if (cachedResponse) {
+        res.status(200).json(cachedResponse);
+        return;
+      }
 
-       if (isStartupGracePeriod(now) || looksLikeWarmupError(message)) {
-         const statusValue = statusCache?.value as any;
-         const lastBlockHeight =
-           toInt(statusValue?.indexer?.currentHeight) ??
-           toInt(statusValue?.daemon?.blocks) ??
-           0;
-         res.setHeader('Retry-After', String(WARMUP_RETRY_AFTER_SECONDS));
-         res.setHeader('x-upstream-degraded', '1');
-         res.status(200).json(
-           buildRichListWarmupPayload(
-             now,
-             page,
-             pageSize,
-             minBalance,
-             lastBlockHeight,
-             `rich list unavailable: ${message}`
-           )
-         );
-         return;
-       }
+      if (isStartupGracePeriod(now) || looksLikeWarmupError(message)) {
+        const statusValue = statusCache?.value as any;
+        const lastBlockHeight =
+          toInt(statusValue?.indexer?.currentHeight) ??
+          toInt(statusValue?.daemon?.blocks) ??
+          0;
+        res.setHeader('Retry-After', String(WARMUP_RETRY_AFTER_SECONDS));
+        res.setHeader('x-upstream-degraded', '1');
+        res.status(200).json(
+          buildRichListWarmupPayload(
+            now,
+            page,
+            pageSize,
+            minBalance,
+            lastBlockHeight,
+            `rich list unavailable: ${message}`
+          )
+        );
+        return;
+      }
 
-       upstreamUnavailable(res, 'upstream_unavailable', message);
-     }
+      upstreamUnavailable(res, 'upstream_unavailable', message);
+    }
   });
 
 

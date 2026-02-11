@@ -12,6 +12,10 @@ const INDEXER_API_URL =
 const CACHE_DURATION = 60;
 const PAGE_SIZE = 1000;
 const MAX_ADDRESSES = 1000;
+const DEFAULT_WARMUP_RETRY_SECONDS = 3;
+const NORMAL_REFRESH_INTERVAL_MS = 60_000;
+const MIN_WARMUP_REFRESH_MS = 1_000;
+const MAX_WARMUP_REFRESH_MS = 10_000;
 
 export const dynamic = 'force-dynamic';
 export const revalidate = CACHE_DURATION;
@@ -44,9 +48,41 @@ type RichListCacheEntry = {
 const richListCache = new Map<string, RichListCacheEntry>();
 const richListRefresh = new Map<string, Promise<void>>();
 
-async function refreshRichList(cacheKey: string, now: number, minBalance: number): Promise<void> {
+function getRefreshIntervalMs(entry: RichListCacheEntry): number {
+  if (!entry.value.warmingUp && !entry.value.degraded) {
+    return NORMAL_REFRESH_INTERVAL_MS;
+  }
+
+  const retrySeconds = Number(
+    entry.value.retryAfterSeconds ?? DEFAULT_WARMUP_RETRY_SECONDS
+  );
+  if (!Number.isFinite(retrySeconds) || retrySeconds <= 0) {
+    return DEFAULT_WARMUP_RETRY_SECONDS * 1000;
+  }
+
+  return Math.max(
+    MIN_WARMUP_REFRESH_MS,
+    Math.min(MAX_WARMUP_REFRESH_MS, Math.trunc(retrySeconds * 1000))
+  );
+}
+
+async function refreshRichList(cacheKey: string, minBalance: number): Promise<void> {
   const data = await fetchRichListData(minBalance);
-  richListCache.set(cacheKey, { at: now, value: data });
+  richListCache.set(cacheKey, { at: Date.now(), value: data });
+}
+
+function scheduleRichListRefresh(cacheKey: string, minBalance: number): void {
+  if (richListRefresh.has(cacheKey)) return;
+
+  const refresh = refreshRichList(cacheKey, minBalance)
+    .catch((error) => {
+      console.warn("Rich list background refresh failed:", error);
+    })
+    .finally(() => {
+      richListRefresh.delete(cacheKey);
+    });
+
+  richListRefresh.set(cacheKey, refresh);
 }
 
 interface IndexerRichListResponse {
@@ -132,11 +168,9 @@ export async function GET(request: NextRequest) {
 
     const cached = richListCache.get(cacheKey);
     if (cached) {
-      if (now - cached.at >= 60_000 && !richListRefresh.get(cacheKey)) {
-        const refresh = refreshRichList(cacheKey, now, minBalance).finally(() => {
-          richListRefresh.delete(cacheKey);
-        });
-        richListRefresh.set(cacheKey, refresh);
+      const refreshIntervalMs = getRefreshIntervalMs(cached);
+      if (now - cached.at >= refreshIntervalMs) {
+        scheduleRichListRefresh(cacheKey, minBalance);
       }
 
       return NextResponse.json(
@@ -184,7 +218,7 @@ export async function GET(request: NextRequest) {
     });
 
     const data = await fetchPromise;
-    richListCache.set(cacheKey, { at: now, value: data });
+    richListCache.set(cacheKey, { at: Date.now(), value: data });
 
     return NextResponse.json(
       {
