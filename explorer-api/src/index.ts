@@ -46,19 +46,53 @@ app.use((req, res, next) => {
   next();
 });
 
-const rateState = new Map<
-  string,
-  { tokens: number; lastRefillMs: number; blockedUntilMs: number; hits: number; penalties: number }
->();
-const RATE_LIMIT_CAPACITY = 600;
-const RATE_LIMIT_REFILL_PER_SEC = 10;
-const RATE_LIMIT_BAN_MS = 2_000;
-const RATE_LIMIT_STATE_TTL_MS = 10 * 60_000;
-const ABUSE_PENALTY_THRESHOLD = 10;
-const ABUSE_PENALTY_WINDOW_MS = 30_000;
+type RateState = {
+  tokens: number;
+  lastRefillMs: number;
+  blockedUntilMs: number;
+  hits: number;
+  penalties: number;
+};
 
+type RatePolicy = {
+  cost: number;
+  concurrentLimit: number;
+  blockMs: number;
+  penaltyThreshold: number;
+  penaltyWindowMs: number;
+};
+
+const rateState = new Map<string, RateState>();
+const inFlightByIpPath = new Map<string, number>();
 const bannedIps = new Map<string, { untilMs: number; reason: string }>();
-const BANLIST_ENTRY_TTL_MS = 60 * 60_000;
+
+const RATE_LIMIT_CAPACITY = 240;
+const RATE_LIMIT_REFILL_PER_SEC = 8;
+const RATE_LIMIT_STATE_TTL_MS = 10 * 60_000;
+
+const DEFAULT_POLICY: RatePolicy = {
+  cost: 1,
+  concurrentLimit: 24,
+  blockMs: 2_000,
+  penaltyThreshold: 12,
+  penaltyWindowMs: 45_000,
+};
+
+const HEAVY_POLICY: RatePolicy = {
+  cost: 8,
+  concurrentLimit: 2,
+  blockMs: 3_000,
+  penaltyThreshold: 6,
+  penaltyWindowMs: 60_000,
+};
+
+const VERY_HEAVY_POLICY: RatePolicy = {
+  cost: 12,
+  concurrentLimit: 1,
+  blockMs: 5_000,
+  penaltyThreshold: 5,
+  penaltyWindowMs: 90_000,
+};
 
 let lastSweptMs = Date.now();
 
@@ -70,10 +104,55 @@ function sweepMaps(now: number): void {
   }
 
   for (const [ip, ban] of bannedIps) {
-    if (ban.untilMs <= now - BANLIST_ENTRY_TTL_MS) {
+    if (ban.untilMs <= now) {
       bannedIps.delete(ip);
     }
   }
+}
+
+function normalizeIp(ip: string): string {
+  return ip.startsWith('::ffff:') ? ip.slice(7) : ip;
+}
+
+function isTrustedInternalIp(ip: string): boolean {
+  if (ip === '127.0.0.1' || ip === '::1') return true;
+  if (ip.startsWith('172.18.')) return true;
+  return false;
+}
+
+function normalizeRatePath(path: string): string {
+  if (path.startsWith('/api/v1/addresses/') && path.endsWith('/transactions')) {
+    return '/api/v1/addresses/:address/transactions';
+  }
+  if (path === '/api/v1/transactions/batch') {
+    return '/api/v1/transactions/batch';
+  }
+  if (path === '/api/v1/blocks/range') {
+    return '/api/v1/blocks/range';
+  }
+  if (path === '/api/v1/richlist') {
+    return '/api/v1/richlist';
+  }
+  return path;
+}
+
+function ratePolicyFor(method: string, normalizedPath: string): RatePolicy {
+  if (method === 'POST' && normalizedPath === '/api/v1/transactions/batch') {
+    return VERY_HEAVY_POLICY;
+  }
+
+  if (
+    normalizedPath === '/api/v1/addresses/:address/transactions' ||
+    normalizedPath === '/api/v1/blocks/range'
+  ) {
+    return HEAVY_POLICY;
+  }
+
+  if (normalizedPath === '/api/v1/richlist') {
+    return { ...HEAVY_POLICY, cost: 6, concurrentLimit: 2 };
+  }
+
+  return DEFAULT_POLICY;
 }
 
 app.use((req, res, next) => {
@@ -93,17 +172,26 @@ app.use((req, res, next) => {
     return;
   }
 
+  const ip = normalizeIp(req.ip ?? 'unknown');
+  if (isTrustedInternalIp(ip)) {
+    next();
+    return;
+  }
+
+  const normalizedPath = normalizeRatePath(path);
+  const policy = ratePolicyFor(req.method, normalizedPath);
+
   const now = Date.now();
   if (now - lastSweptMs > 60_000) {
     lastSweptMs = now;
     sweepMaps(now);
   }
 
-  const ip = req.ip ?? 'unknown';
-
   const ban = bannedIps.get(ip);
   if (ban && ban.untilMs > now) {
-    res.status(429).json({ error: 'rate_limited' });
+    const retryAfterSeconds = Math.max(1, Math.ceil((ban.untilMs - now) / 1000));
+    res.setHeader('Retry-After', String(retryAfterSeconds));
+    res.status(429).json({ error: 'rate_limited', retryAfterSeconds, reason: ban.reason });
     return;
   }
 
@@ -117,7 +205,9 @@ app.use((req, res, next) => {
   };
 
   if (state.blockedUntilMs > now) {
-    res.status(429).json({ error: 'rate_limited' });
+    const retryAfterSeconds = Math.max(1, Math.ceil((state.blockedUntilMs - now) / 1000));
+    res.setHeader('Retry-After', String(retryAfterSeconds));
+    res.status(429).json({ error: 'rate_limited', retryAfterSeconds });
     return;
   }
 
@@ -126,24 +216,70 @@ app.use((req, res, next) => {
   state.tokens = Math.min(RATE_LIMIT_CAPACITY, state.tokens + refill);
   state.lastRefillMs = now;
 
-  if (state.tokens < 1) {
-    state.blockedUntilMs = now + RATE_LIMIT_BAN_MS;
+  const inFlightKey = `${ip}:${normalizedPath}`;
+  const inFlightCount = inFlightByIpPath.get(inFlightKey) ?? 0;
+
+  const applyPenalty = (reason: string): number => {
+    state.blockedUntilMs = now + policy.blockMs;
     state.penalties += 1;
     rateState.set(ip, state);
 
-    if (state.penalties >= ABUSE_PENALTY_THRESHOLD) {
-      bannedIps.set(ip, { untilMs: now + ABUSE_PENALTY_WINDOW_MS, reason: 'rate_limit' });
+    if (state.penalties >= policy.penaltyThreshold) {
+      bannedIps.set(ip, { untilMs: now + policy.penaltyWindowMs, reason });
       state.penalties = 0;
       rateState.set(ip, state);
+      return Math.max(1, Math.ceil(policy.penaltyWindowMs / 1000));
     }
 
-    res.status(429).json({ error: 'rate_limited' });
+    return Math.max(1, Math.ceil(policy.blockMs / 1000));
+  };
+
+  const emitRateHeaders = (): void => {
+    const remaining = Math.max(0, Math.floor(state.tokens));
+    const resetSeconds = Math.max(
+      1,
+      Math.ceil((RATE_LIMIT_CAPACITY - Math.min(state.tokens, RATE_LIMIT_CAPACITY)) / RATE_LIMIT_REFILL_PER_SEC)
+    );
+    res.setHeader('x-ratelimit-limit', String(RATE_LIMIT_CAPACITY));
+    res.setHeader('x-ratelimit-remaining', String(remaining));
+    res.setHeader('x-ratelimit-reset', String(resetSeconds));
+  };
+
+  if (inFlightCount >= policy.concurrentLimit) {
+    const retryAfterSeconds = applyPenalty('concurrency_limit');
+    emitRateHeaders();
+    res.setHeader('Retry-After', String(retryAfterSeconds));
+    res.status(429).json({ error: 'rate_limited', retryAfterSeconds, reason: 'concurrency_limit' });
     return;
   }
 
-  state.tokens -= 1;
+  if (state.tokens < policy.cost) {
+    const retryAfterSeconds = applyPenalty('burst_limit');
+    emitRateHeaders();
+    res.setHeader('Retry-After', String(retryAfterSeconds));
+    res.status(429).json({ error: 'rate_limited', retryAfterSeconds, reason: 'burst_limit' });
+    return;
+  }
+
+  state.tokens -= policy.cost;
   state.hits += 1;
   rateState.set(ip, state);
+  emitRateHeaders();
+
+  inFlightByIpPath.set(inFlightKey, inFlightCount + 1);
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    const current = inFlightByIpPath.get(inFlightKey) ?? 0;
+    if (current <= 1) {
+      inFlightByIpPath.delete(inFlightKey);
+    } else {
+      inFlightByIpPath.set(inFlightKey, current - 1);
+    }
+  };
+  res.on('finish', release);
+  res.on('close', release);
 
   next();
 });

@@ -107,6 +107,92 @@ function normalizePath(path: string): string {
   return path;
 }
 
+const STARTUP_GRACE_PERIOD_MS = 2 * 60_000;
+const WARMUP_RETRY_AFTER_SECONDS = 3;
+
+function isStartupGracePeriod(nowMs: number): boolean {
+  return nowMs - metricsState.startedAtMs <= STARTUP_GRACE_PERIOD_MS;
+}
+
+function looksLikeWarmupError(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes('warming up') ||
+    normalized.includes('fetch failed') ||
+    normalized.includes('econnrefused') ||
+    normalized.includes('socket hang up') ||
+    normalized.includes('timed out') ||
+    normalized.includes('headers timeout') ||
+    normalized.includes('connection reset')
+  );
+}
+
+function buildHomeWarmupPayload(
+  nowMs: number,
+  statusPayload: unknown,
+  dashboardPayload: unknown,
+  message: string
+): Record<string, unknown> {
+  const status = (statusPayload ?? {}) as any;
+  const dashboard = (dashboardPayload ?? null) as any;
+
+  const tipHeight =
+    toInt(status?.indexer?.currentHeight) ??
+    toInt(status?.daemon?.blocks) ??
+    toInt(dashboard?.latestBlock?.height) ??
+    0;
+
+  const tipHash =
+    typeof status?.daemon?.bestBlockHash === 'string'
+      ? status.daemon.bestBlockHash
+      : typeof dashboard?.latestBlock?.hash === 'string'
+        ? dashboard.latestBlock.hash
+        : null;
+
+  const tipTime =
+    toInt(status?.timestamp ? Date.parse(status.timestamp) / 1000 : null) ??
+    toInt(dashboard?.latestBlock?.timestamp) ??
+    null;
+
+  return {
+    tipHeight,
+    tipHash,
+    tipTime,
+    latestBlocks: [],
+    dashboard: dashboard ?? null,
+    warmingUp: true,
+    degraded: true,
+    retryAfterSeconds: WARMUP_RETRY_AFTER_SECONDS,
+    message,
+    generatedAt: new Date(nowMs).toISOString(),
+  };
+}
+
+function buildRichListWarmupPayload(
+  nowMs: number,
+  page: number,
+  pageSize: number,
+  minBalance: number,
+  lastBlockHeight: number,
+  message: string
+): Record<string, unknown> {
+  return {
+    lastUpdate: new Date(nowMs).toISOString(),
+    lastBlockHeight,
+    totalSupply: '0',
+    totalAddresses: 0,
+    page,
+    pageSize,
+    totalPages: 0,
+    minBalance,
+    addresses: [],
+    warmingUp: true,
+    degraded: true,
+    retryAfterSeconds: WARMUP_RETRY_AFTER_SECONDS,
+    message,
+  };
+}
+
 export function registerRoutes(app: Express, env: Env) {
   app.use('/api/v1', (req: Request, res: Response, next) => {
     const startedAt = Date.now();
@@ -436,9 +522,44 @@ export function registerRoutes(app: Express, env: Env) {
 
     try {
       await kickHomeSnapshotRefresh();
-      res.status(200).json(homeSnapshotCache?.value);
+      if (homeSnapshotCache?.value != null) {
+        res.status(200).json(homeSnapshotCache.value);
+        return;
+      }
+
+      res.setHeader('Retry-After', String(WARMUP_RETRY_AFTER_SECONDS));
+      res.setHeader('x-upstream-degraded', '1');
+      res.status(200).json(
+        buildHomeWarmupPayload(
+          now,
+          statusCache?.value ?? null,
+          dashboardStatsCache?.value ?? null,
+          'home snapshot is warming up'
+        )
+      );
     } catch (error) {
-      upstreamUnavailable(res, 'upstream_unavailable', error instanceof Error ? error.message : 'Unknown error');
+      if (homeSnapshotCache?.value != null) {
+        res.status(200).json(homeSnapshotCache.value);
+        return;
+      }
+
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      const shouldDegrade = isStartupGracePeriod(now) || looksLikeWarmupError(message);
+      if (shouldDegrade) {
+        res.setHeader('Retry-After', String(WARMUP_RETRY_AFTER_SECONDS));
+        res.setHeader('x-upstream-degraded', '1');
+        res.status(200).json(
+          buildHomeWarmupPayload(
+            now,
+            statusCache?.value ?? null,
+            dashboardStatsCache?.value ?? null,
+            `home snapshot unavailable: ${message}`
+          )
+        );
+        return;
+      }
+
+      upstreamUnavailable(res, 'upstream_unavailable', message);
     }
   });
 
@@ -805,25 +926,33 @@ export function registerRoutes(app: Express, env: Env) {
        res.status(200).json(richListCache.get(key)?.value);
      } catch (error) {
        const message = error instanceof Error ? error.message : 'Unknown error';
-         if (message.includes('rich list warming up')) {
-           const cachedResponse = richListCache.get(key)?.value;
-           if (cachedResponse) {
-             res.status(200).json(cachedResponse);
-             return;
-           }
+       const cachedResponse = richListCache.get(key)?.value;
+       if (cachedResponse) {
+         res.status(200).json(cachedResponse);
+         return;
+       }
 
-           res.status(200).json({
-             lastUpdate: new Date().toISOString(),
-             lastBlockHeight: 0,
-             totalSupply: '0',
-             totalAddresses: 0,
+       if (isStartupGracePeriod(now) || looksLikeWarmupError(message)) {
+         const statusValue = statusCache?.value as any;
+         const lastBlockHeight =
+           toInt(statusValue?.indexer?.currentHeight) ??
+           toInt(statusValue?.daemon?.blocks) ??
+           0;
+         res.setHeader('Retry-After', String(WARMUP_RETRY_AFTER_SECONDS));
+         res.setHeader('x-upstream-degraded', '1');
+         res.status(200).json(
+           buildRichListWarmupPayload(
+             now,
              page,
              pageSize,
-             totalPages: 0,
-             addresses: [],
-           });
-           return;
-         }
+             minBalance,
+             lastBlockHeight,
+             `rich list unavailable: ${message}`
+           )
+         );
+         return;
+       }
+
        upstreamUnavailable(res, 'upstream_unavailable', message);
      }
   });
