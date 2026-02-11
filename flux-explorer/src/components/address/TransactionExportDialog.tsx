@@ -120,6 +120,36 @@ export function TransactionExportDialog({
       const delayBetweenPagesMs = 25;
       const MAX_EXPORT_TRANSACTIONS = 50_000;
 
+      setCurrentStatus("Preparing export session...");
+      const exportSessionResponse = await fetch("/api/export/session", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          address,
+          fromTimestamp,
+          toTimestamp,
+          limit: batchSize,
+        }),
+      });
+
+      if (!exportSessionResponse.ok) {
+        const errorPayload = await exportSessionResponse
+          .json()
+          .catch(() => null) as { error?: string; retryAfterSeconds?: number } | null;
+        const message = errorPayload?.error ?? "Failed to initialize export session";
+        if (errorPayload?.retryAfterSeconds) {
+          throw new Error(`${message}. Retry after ${errorPayload.retryAfterSeconds}s`);
+        }
+        throw new Error(message);
+      }
+
+      const exportSession = await exportSessionResponse.json() as {
+        token: string;
+      };
+      const exportToken = exportSession.token;
+
       const fetchWithRetry = async <T,>(fn: () => Promise<T>, label: string): Promise<T> => {
         const attempts = 3;
         let lastErr: unknown;
@@ -164,6 +194,7 @@ export function TransactionExportDialog({
           to: batchSize,
           fromTimestamp,
           toTimestamp,
+          exportToken,
           cursorHeight: cursor?.height,
           cursorTxIndex: cursor?.txIndex,
           cursorTxid: cursor?.txid,

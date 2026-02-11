@@ -338,9 +338,12 @@ export interface QueryParams {
   to?: number;
   limit?: number;
   offset?: number;
+  fromTimestamp?: number;
+  toTimestamp?: number;
   cursorHeight?: number;
   cursorTxIndex?: number;
   cursorTxid?: string;
+  exportToken?: string;
 }
 
 export interface AddressTransactionSummary {

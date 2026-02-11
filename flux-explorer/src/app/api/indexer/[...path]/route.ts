@@ -11,6 +11,10 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import {
+  consumeExportRequestQuota,
+  verifyExportToken,
+} from "@/lib/security/export-guard";
 
 // Get indexer URL from environment
 // Production (Flux/VPS): SERVER_API_URL set via docker-compose
@@ -117,8 +121,91 @@ async function proxyRequest(
     }
 
     // Get search params from the request
-    const searchParams = request.nextUrl.searchParams.toString();
-    const queryString = searchParams ? `?${searchParams}` : '';
+    const searchParams = new URLSearchParams(request.nextUrl.searchParams);
+
+    const addressTxMatch = path.match(/^api\/v1\/addresses\/([^/]+)\/transactions$/);
+    const addressForTxRoute = addressTxMatch?.[1] ?? null;
+    const limitParam = searchParams.get("limit");
+    const limit = limitParam != null ? Number(limitParam) : NaN;
+    const isLargeAddressExportRequest =
+      method === "GET" &&
+      addressForTxRoute != null &&
+      searchParams.has("fromTimestamp") &&
+      searchParams.has("toTimestamp") &&
+      Number.isFinite(limit) &&
+      limit >= 200;
+
+    const getClientIp = (): string => {
+      const forwardedFor = request.headers.get("x-forwarded-for");
+      if (forwardedFor) {
+        const first = forwardedFor.split(",")[0]?.trim();
+        if (first) return first;
+      }
+
+      const realIp = request.headers.get("x-real-ip");
+      if (realIp) return realIp;
+
+      return request.ip ?? "unknown";
+    };
+
+    if (isLargeAddressExportRequest && addressForTxRoute) {
+      const exportToken = searchParams.get("exportToken");
+      if (!exportToken) {
+        return NextResponse.json(
+          { error: "missing_export_token" },
+          { status: 401 }
+        );
+      }
+
+      const fromTimestamp = Math.trunc(Number(searchParams.get("fromTimestamp")));
+      const toTimestamp = Math.trunc(Number(searchParams.get("toTimestamp")));
+      if (
+        !Number.isFinite(fromTimestamp) ||
+        !Number.isFinite(toTimestamp) ||
+        fromTimestamp <= 0 ||
+        toTimestamp <= 0 ||
+        fromTimestamp > toTimestamp
+      ) {
+        return NextResponse.json(
+          { error: "invalid_timestamp_range" },
+          { status: 400 }
+        );
+      }
+
+      const clientIp = getClientIp();
+      const verifyResult = verifyExportToken({
+        token: exportToken,
+        ip: clientIp,
+        address: addressForTxRoute,
+        fromTimestamp,
+        toTimestamp,
+        limit,
+      });
+      if (!verifyResult.ok) {
+        return NextResponse.json(
+          { error: "invalid_export_token", reason: verifyResult.reason },
+          { status: 401 }
+        );
+      }
+
+      const requestQuota = consumeExportRequestQuota(clientIp);
+      if (!requestQuota.ok) {
+        const retryAfterSeconds = requestQuota.retryAfterSeconds ?? 1;
+        return NextResponse.json(
+          { error: "rate_limited", retryAfterSeconds, scope: "export" },
+          {
+            status: 429,
+            headers: {
+              "Retry-After": String(retryAfterSeconds),
+            },
+          }
+        );
+      }
+    }
+
+    searchParams.delete("exportToken");
+    const query = searchParams.toString();
+    const queryString = query ? `?${query}` : '';
 
     // Security: Maximum query string length
     const MAX_QUERY_LENGTH = 2000;
@@ -166,16 +253,6 @@ async function proxyRequest(
       } catch {
       }
     }
-
-    const isAddressTxRoute = /^api\/v1\/addresses\/[^/]+\/transactions$/.test(path);
-    const limitParam = request.nextUrl.searchParams.get('limit');
-    const limit = limitParam != null ? Number(limitParam) : NaN;
-    const isLargeAddressExportRequest =
-      isAddressTxRoute &&
-      request.nextUrl.searchParams.has('fromTimestamp') &&
-      request.nextUrl.searchParams.has('toTimestamp') &&
-      Number.isFinite(limit) &&
-      limit >= 200;
 
     const timeoutMs = isLargeAddressExportRequest
       ? 90_000

@@ -836,6 +836,7 @@ export class FluxIndexerAPI {
       cursorHeight?: number;
       cursorTxIndex?: number;
       cursorTxid?: string;
+      exportToken?: string;
     },
     requestOptions?: AddressTransactionsRequestOptions
   ): Promise<AddressTransactionsPage> {
@@ -876,6 +877,9 @@ export class FluxIndexerAPI {
       }
       if (params?.toTimestamp !== undefined) {
         searchParams.toTimestamp = params.toTimestamp.toString();
+      }
+      if (params?.exportToken) {
+        searchParams.exportToken = params.exportToken;
       }
 
       const requestConfig: Options = { searchParams };
@@ -966,6 +970,7 @@ export class FluxIndexerAPI {
       cursorHeight?: number;
       cursorTxIndex?: number;
       cursorTxid?: string;
+      exportToken?: string;
     }
   ): Promise<AddressTransactionsPage> {
     return this.fetchAddressTransactions(addresses, params);
@@ -983,6 +988,7 @@ export class FluxIndexerAPI {
       cursorHeight?: number;
       cursorTxIndex?: number;
       cursorTxid?: string;
+      exportToken?: string;
     }
   ): Promise<AddressTransactionsPage> {
     return this.fetchAddressTransactions(addresses, params, {
