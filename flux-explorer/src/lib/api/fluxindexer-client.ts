@@ -219,7 +219,7 @@ interface FluxIndexerAddressTransactionsResponse {
   };
 }
 
-interface AddressTransactionsRequestOptions {
+export interface AddressTransactionsRequestOptions {
   timeoutMs?: number;
   retryLimit?: number;
 }
@@ -837,6 +837,7 @@ export class FluxIndexerAPI {
       cursorTxIndex?: number;
       cursorTxid?: string;
       exportToken?: string;
+      excludeCoinbase?: boolean;
     },
     requestOptions?: AddressTransactionsRequestOptions
   ): Promise<AddressTransactionsPage> {
@@ -880,6 +881,9 @@ export class FluxIndexerAPI {
       }
       if (params?.exportToken) {
         searchParams.exportToken = params.exportToken;
+      }
+      if (params?.excludeCoinbase) {
+        searchParams.excludeCoinbase = "1";
       }
 
       const requestConfig: Options = { searchParams };
@@ -971,9 +975,11 @@ export class FluxIndexerAPI {
       cursorTxIndex?: number;
       cursorTxid?: string;
       exportToken?: string;
-    }
+      excludeCoinbase?: boolean;
+    },
+    requestOptions?: AddressTransactionsRequestOptions
   ): Promise<AddressTransactionsPage> {
-    return this.fetchAddressTransactions(addresses, params);
+    return this.fetchAddressTransactions(addresses, params, requestOptions);
   }
 
   static async getAddressTransactionsForExport(
@@ -989,6 +995,7 @@ export class FluxIndexerAPI {
       cursorTxIndex?: number;
       cursorTxid?: string;
       exportToken?: string;
+      excludeCoinbase?: boolean;
     }
   ): Promise<AddressTransactionsPage> {
     return this.fetchAddressTransactions(addresses, params, {

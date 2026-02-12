@@ -1250,6 +1250,7 @@ export async function getAddressTransactions(
     toBlock?: number;
     fromTimestamp?: number;
     toTimestamp?: number;
+    excludeCoinbase?: boolean;
   }
 ): Promise<FluxIndexerAddressTransactionsResponse> {
   const rangeStart = params.fromBlock ?? 0;
@@ -1261,6 +1262,7 @@ export async function getAddressTransactions(
 
   const fromTs = params.fromTimestamp;
   const toTs = params.toTimestamp;
+  const excludeCoinbase = params.excludeCoinbase === true;
 
   const limit = Math.max(1, Math.min(params.limit, 250));
   const scanLimit = limit * 50;
@@ -1404,6 +1406,9 @@ export async function getAddressTransactions(
       while (page.length < limit && scanIndex < groupedTxs.length && scanned < scanLimit) {
         const tx = groupedTxs[scanIndex];
         scanIndex += 1;
+        if (excludeCoinbase && tx.txIndex === 0) {
+          continue;
+        }
         scanned += 1;
 
         const header = await getBlockHeaderByHeightCached(env, tx.height);
@@ -1429,6 +1434,9 @@ export async function getAddressTransactions(
       while (page.length < limit && scanIndex < groupedTxs.length && scanned < scanLimit) {
         const tx = groupedTxs[scanIndex];
         scanIndex += 1;
+        if (excludeCoinbase && tx.txIndex === 0) {
+          continue;
+        }
 
         if (remainingSkip > 0 && fromTs == null && toTs == null) {
           remainingSkip -= 1;

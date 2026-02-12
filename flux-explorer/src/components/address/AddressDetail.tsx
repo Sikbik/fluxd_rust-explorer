@@ -6,16 +6,22 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AddressHeader } from "./AddressHeader";
 import { AddressOverview } from "./AddressOverview";
+import { AddressConstellation } from "./AddressConstellation";
 import { AddressTransactions } from "./AddressTransactions";
 import { PollingControls } from "@/components/common/PollingControls";
 import { usePolling, POLLING_INTERVALS } from "@/hooks/usePolling";
 import { AlertCircle } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { getAddressConstellation } from "@/lib/api/address-constellation-client";
+import { addressConstellationKeys } from "@/lib/api/hooks/useAddressConstellation";
 
 interface AddressDetailProps {
   address: string;
 }
 
 export function AddressDetail({ address }: AddressDetailProps) {
+  const queryClient = useQueryClient();
+
   // Set up polling for address balance updates
   const polling = usePolling({
     interval: POLLING_INTERVALS.NORMAL, // 30 seconds default
@@ -42,6 +48,21 @@ export function AddressDetail({ address }: AddressDetailProps) {
     if (polling.refreshToken === 0) return;
     refetch({ cancelRefetch: true });
   }, [polling.refreshToken, refetch]);
+
+  useEffect(() => {
+    const normalizedAddress = address.trim();
+    if (!normalizedAddress) return;
+
+    queryClient
+      .prefetchQuery({
+        queryKey: addressConstellationKeys.detail(normalizedAddress),
+        queryFn: () => getAddressConstellation(normalizedAddress),
+        staleTime: 20_000,
+      })
+      .catch(() => {
+        // Prefetch is best-effort only.
+      });
+  }, [address, queryClient]);
 
   // Connect manual refresh to query refetch
   const handleRefresh = () => {
@@ -102,6 +123,12 @@ export function AddressDetail({ address }: AddressDetailProps) {
       {/* Address Overview Stats */}
       <AddressOverview addressInfo={addressInfo} />
 
+      {/* Address Relationship Constellation */}
+      <AddressConstellation
+        address={address}
+        pollingToken={polling.refreshToken}
+      />
+
       {/* Transaction History */}
       <AddressTransactions
         addressInfo={addressInfo}
@@ -122,6 +149,7 @@ function AddressDetailSkeleton() {
           <Skeleton key={i} className="h-32 w-full" />
         ))}
       </div>
+      <Skeleton className="h-[460px] w-full" />
       <Skeleton className="h-96 w-full" />
     </div>
   );

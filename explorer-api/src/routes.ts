@@ -23,6 +23,13 @@ function toInt(value: unknown): number | null {
   return Math.trunc(n);
 }
 
+function toBool(value: unknown): boolean {
+  if (typeof value === 'boolean') return value;
+  if (typeof value !== 'string') return false;
+  const normalized = value.trim().toLowerCase();
+  return normalized === '1' || normalized === 'true' || normalized === 'yes';
+}
+
 function badRequest(res: Response, error: string, message?: string): void {
   res.status(400).json({ error, message });
 }
@@ -767,6 +774,7 @@ export function registerRoutes(app: Express, env: Env) {
        const toBlock = toInt(req.query.toBlock) ?? undefined;
        const fromTimestamp = toInt(req.query.fromTimestamp) ?? undefined;
        const toTimestamp = toInt(req.query.toTimestamp) ?? undefined;
+       const excludeCoinbase = toBool(req.query.excludeCoinbase);
 
        // Always use getAddressTransactions for correct satoshi values
        const response = await getAddressTransactions(env, address, {
@@ -779,6 +787,7 @@ export function registerRoutes(app: Express, env: Env) {
          toBlock,
          fromTimestamp,
          toTimestamp,
+         excludeCoinbase,
        });
 
        res.status(200).json(response);

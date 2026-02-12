@@ -344,6 +344,7 @@ export interface QueryParams {
   cursorTxIndex?: number;
   cursorTxid?: string;
   exportToken?: string;
+  excludeCoinbase?: boolean;
 }
 
 export interface AddressTransactionSummary {

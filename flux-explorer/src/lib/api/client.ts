@@ -3,7 +3,11 @@
  * Type-safe client for interacting with the Flux blockchain via FluxIndexer API.
  */
 
-import { FluxIndexerAPI, FluxIndexerAPIError } from "./fluxindexer-client";
+import {
+  FluxIndexerAPI,
+  FluxIndexerAPIError,
+  type AddressTransactionsRequestOptions,
+} from "./fluxindexer-client";
 import type {
   Block,
   BlockSummary,
@@ -192,14 +196,15 @@ export class FluxAPI {
    */
   static async getAddressTransactions(
     addresses: string[],
-    params?: { from?: number; to?: number; fromBlock?: number; toBlock?: number; fromTimestamp?: number; toTimestamp?: number; cursorHeight?: number; cursorTxIndex?: number; cursorTxid?: string; exportToken?: string }
+    params?: { from?: number; to?: number; fromBlock?: number; toBlock?: number; fromTimestamp?: number; toTimestamp?: number; cursorHeight?: number; cursorTxIndex?: number; cursorTxid?: string; exportToken?: string; excludeCoinbase?: boolean },
+    requestOptions?: AddressTransactionsRequestOptions
   ): Promise<AddressTransactionsPage> {
-    return FluxIndexerAPI.getAddressTransactions(addresses, params);
+    return FluxIndexerAPI.getAddressTransactions(addresses, params, requestOptions);
   }
 
   static async getAddressTransactionsForExport(
     addresses: string[],
-    params?: { from?: number; to?: number; fromBlock?: number; toBlock?: number; fromTimestamp?: number; toTimestamp?: number; cursorHeight?: number; cursorTxIndex?: number; cursorTxid?: string; exportToken?: string }
+    params?: { from?: number; to?: number; fromBlock?: number; toBlock?: number; fromTimestamp?: number; toTimestamp?: number; cursorHeight?: number; cursorTxIndex?: number; cursorTxid?: string; exportToken?: string; excludeCoinbase?: boolean }
   ): Promise<AddressTransactionsPage> {
     return FluxIndexerAPI.getAddressTransactionsForExport(addresses, params);
   }
