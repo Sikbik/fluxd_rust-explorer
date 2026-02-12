@@ -47,7 +47,7 @@ services:
     depends_on:
       - fluxd
     ports:
-      - "42067:42067"
+      - "127.0.0.1:42067:42067"
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:42067/ready').then(r=>process.exit(r.status===200?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
@@ -70,7 +70,7 @@ services:
     depends_on:
       - explorer-api
     ports:
-      - "42069:42069"
+      - "127.0.0.1:42069:42069"
     volumes:
       - explorer-data:/app/data
     healthcheck:
