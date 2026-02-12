@@ -738,12 +738,59 @@ export function registerRoutes(app: Express, env: Env) {
     }
   });
 
+  const ADDRESS_SUMMARY_FRESH_MS = 15_000;
+  const ADDRESS_SUMMARY_STALE_MAX_MS = 3 * 60_000;
+  const addressSummaryCache = new Map<string, { at: number; value: unknown }>();
+  const addressSummaryRefresh = new Map<string, Promise<void>>();
+
+  async function refreshAddressSummary(address: string): Promise<void> {
+    const response = await getAddressSummary(env, address);
+    addressSummaryCache.set(address, { at: Date.now(), value: response });
+  }
+
+  function kickAddressSummaryRefresh(address: string): Promise<void> {
+    const inflight = addressSummaryRefresh.get(address);
+    if (inflight) return inflight;
+
+    const refresh = refreshAddressSummary(address)
+      .finally(() => {
+        addressSummaryRefresh.delete(address);
+      });
+
+    addressSummaryRefresh.set(address, refresh);
+    return refresh;
+  }
+
   app.get('/api/v1/addresses/:address', async (req: Request, res: Response) => {
+    const address = req.params.address;
+    const now = Date.now();
+    const cached = addressSummaryCache.get(address);
+
+    res.setHeader('Cache-Control', 'public, max-age=0, s-maxage=15, stale-while-revalidate=180');
+
+    if (cached && now - cached.at < ADDRESS_SUMMARY_STALE_MAX_MS) {
+      if (now - cached.at >= ADDRESS_SUMMARY_FRESH_MS) {
+        void kickAddressSummaryRefresh(address).catch(() => {});
+      }
+      res.status(200).json(cached.value);
+      return;
+    }
+
     try {
-      const address = req.params.address;
-      const response = await getAddressSummary(env, address);
-      res.status(200).json(response);
+      await kickAddressSummaryRefresh(address);
+      const latest = addressSummaryCache.get(address);
+      if (latest) {
+        res.status(200).json(latest.value);
+        return;
+      }
+
+      throw new Error('Address summary unavailable');
     } catch (error) {
+      if (cached) {
+        res.status(200).json(cached.value);
+        return;
+      }
+
       notFound(res, 'not_found', error instanceof Error ? error.message : 'Unknown error');
     }
   });
@@ -775,6 +822,7 @@ export function registerRoutes(app: Express, env: Env) {
        const fromTimestamp = toInt(req.query.fromTimestamp) ?? undefined;
        const toTimestamp = toInt(req.query.toTimestamp) ?? undefined;
        const excludeCoinbase = toBool(req.query.excludeCoinbase);
+       const includeIo = req.query.includeIo == null ? true : toBool(req.query.includeIo);
 
        // Always use getAddressTransactions for correct satoshi values
        const response = await getAddressTransactions(env, address, {
@@ -788,6 +836,7 @@ export function registerRoutes(app: Express, env: Env) {
          fromTimestamp,
          toTimestamp,
          excludeCoinbase,
+         includeIo,
        });
 
        res.status(200).json(response);

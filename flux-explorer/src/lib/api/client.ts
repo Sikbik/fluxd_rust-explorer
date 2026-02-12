@@ -196,7 +196,7 @@ export class FluxAPI {
    */
   static async getAddressTransactions(
     addresses: string[],
-    params?: { from?: number; to?: number; fromBlock?: number; toBlock?: number; fromTimestamp?: number; toTimestamp?: number; cursorHeight?: number; cursorTxIndex?: number; cursorTxid?: string; exportToken?: string; excludeCoinbase?: boolean },
+    params?: { from?: number; to?: number; fromBlock?: number; toBlock?: number; fromTimestamp?: number; toTimestamp?: number; cursorHeight?: number; cursorTxIndex?: number; cursorTxid?: string; exportToken?: string; excludeCoinbase?: boolean; includeIo?: boolean },
     requestOptions?: AddressTransactionsRequestOptions
   ): Promise<AddressTransactionsPage> {
     return FluxIndexerAPI.getAddressTransactions(addresses, params, requestOptions);
@@ -204,7 +204,7 @@ export class FluxAPI {
 
   static async getAddressTransactionsForExport(
     addresses: string[],
-    params?: { from?: number; to?: number; fromBlock?: number; toBlock?: number; fromTimestamp?: number; toTimestamp?: number; cursorHeight?: number; cursorTxIndex?: number; cursorTxid?: string; exportToken?: string; excludeCoinbase?: boolean }
+    params?: { from?: number; to?: number; fromBlock?: number; toBlock?: number; fromTimestamp?: number; toTimestamp?: number; cursorHeight?: number; cursorTxIndex?: number; cursorTxid?: string; exportToken?: string; excludeCoinbase?: boolean; includeIo?: boolean }
   ): Promise<AddressTransactionsPage> {
     return FluxIndexerAPI.getAddressTransactionsForExport(addresses, params);
   }

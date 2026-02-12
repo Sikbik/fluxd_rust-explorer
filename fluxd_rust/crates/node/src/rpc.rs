@@ -12919,6 +12919,7 @@ fn rpc_getaddressdeltas<S: fluxd_storage::KeyValueStore>(
     }
     let (addresses, opts) = parse_addresses_param(&params[0])?;
     let include_chain_info = parse_chain_info_flag(opts)?;
+    let exclude_coinbase = parse_exclude_coinbase_flag(opts)?;
     let range = parse_height_range(chainstate, opts)?;
     let address_scripts = decode_address_scripts(addresses, chain_params.network)?;
 
@@ -12939,6 +12940,9 @@ fn rpc_getaddressdeltas<S: fluxd_storage::KeyValueStore>(
         };
 
         let mut visitor = |delta: fluxd_chainstate::address_deltas::AddressDeltaEntry| {
+            if exclude_coinbase && delta.tx_index == 0 {
+                return Ok(());
+            }
             rows.push(DeltaRow {
                 address: address.clone(),
                 height: delta.height,
@@ -20484,6 +20488,36 @@ mod tests {
         ] {
             assert!(first.contains_key(key), "missing key {key}");
         }
+    }
+
+    #[test]
+    fn getaddressdeltas_exclude_coinbase_filters_coinbase_rows() {
+        let (chainstate, params, _data_dir, address, _txid, _vout) =
+            setup_regtest_chain_with_p2pkh_utxo();
+
+        let full = rpc_getaddressdeltas(
+            &chainstate,
+            vec![json!({ "addresses": [address.clone()] })],
+            &params,
+        )
+        .expect("rpc");
+        let full_rows = full.as_array().expect("array");
+        assert!(!full_rows.is_empty());
+        assert!(
+            full_rows
+                .iter()
+                .any(|row| row.get("blockindex").and_then(Value::as_u64) == Some(0)),
+            "expected at least one coinbase row"
+        );
+
+        let filtered = rpc_getaddressdeltas(
+            &chainstate,
+            vec![json!({ "addresses": [address], "excludeCoinbase": true })],
+            &params,
+        )
+        .expect("rpc");
+        let filtered_rows = filtered.as_array().expect("array");
+        assert!(filtered_rows.is_empty());
     }
 
     #[test]
@@ -31338,6 +31372,18 @@ fn parse_chain_info_flag(opts: Option<&serde_json::Map<String, Value>>) -> Resul
         return Ok(false);
     };
     let Some(value) = map.get("chainInfo") else {
+        return Ok(false);
+    };
+    parse_bool(value)
+}
+
+fn parse_exclude_coinbase_flag(
+    opts: Option<&serde_json::Map<String, Value>>,
+) -> Result<bool, RpcError> {
+    let Some(map) = opts else {
+        return Ok(false);
+    };
+    let Some(value) = map.get("excludeCoinbase") else {
         return Ok(false);
     };
     parse_bool(value)

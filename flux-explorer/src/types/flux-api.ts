@@ -345,6 +345,7 @@ export interface QueryParams {
   cursorTxid?: string;
   exportToken?: string;
   excludeCoinbase?: boolean;
+  includeIo?: boolean;
 }
 
 export interface AddressTransactionSummary {
@@ -386,4 +387,6 @@ export interface AddressTransactionsPage extends PaginatedResponse<AddressTransa
     txIndex: number;
     txid: string;
   };
+  scanned?: number;
+  skippedCoinbase?: number;
 }

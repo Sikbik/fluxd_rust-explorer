@@ -1082,6 +1082,8 @@ export interface FluxIndexerAddressTransactionsResponse {
   limit: number;
   offset?: number;
   nextCursor?: FluxAddressTransactionsCursor;
+  scanned?: number;
+  skippedCoinbase?: number;
 }
 
 type AddressDeltaRow = {
@@ -1215,7 +1217,7 @@ async function getAddressTxCountCached(env: Env, address: string, range?: { star
   return request;
 }
 
-const GROUPED_ADDRESS_TXS_CACHE_TTL_MS = 30_000;
+const GROUPED_ADDRESS_TXS_CACHE_TTL_MS = 120_000;
 const groupedAddressTxsCache = new Map<string, CachedGroupedAddressTxs>();
 const groupedAddressTxsInFlight = new Map<string, Promise<GroupedAddressTx[]>>();
 let lastGroupedAddressTxsSweepMs = 0;
@@ -1231,10 +1233,14 @@ function sweepGroupedAddressTxsCache(nowMs: number): void {
   }
 }
 
-function groupedAddressTxsCacheKey(address: string, range?: { start: number; end: number }): string {
+function groupedAddressTxsCacheKey(
+  address: string,
+  range?: { start: number; end: number },
+  excludeCoinbase: boolean = false
+): string {
   const start = range?.start ?? 0;
   const end = range?.end ?? 0;
-  return `${address}:${start}:${end}`;
+  return `${address}:${start}:${end}:${excludeCoinbase ? 1 : 0}`;
 }
 
 export async function getAddressTransactions(
@@ -1251,6 +1257,7 @@ export async function getAddressTransactions(
     fromTimestamp?: number;
     toTimestamp?: number;
     excludeCoinbase?: boolean;
+    includeIo?: boolean;
   }
 ): Promise<FluxIndexerAddressTransactionsResponse> {
   const rangeStart = params.fromBlock ?? 0;
@@ -1263,15 +1270,17 @@ export async function getAddressTransactions(
   const fromTs = params.fromTimestamp;
   const toTs = params.toTimestamp;
   const excludeCoinbase = params.excludeCoinbase === true;
+  const includeIo = params.includeIo !== false;
 
   const limit = Math.max(1, Math.min(params.limit, 250));
-  const scanLimit = limit * 50;
+  const scanLimitMultiplier = excludeCoinbase ? (includeIo ? 160 : 220) : 50;
+  const scanLimit = limit * scanLimitMultiplier;
 
   const nowMs = Date.now();
   sweepGroupedAddressTxsCache(nowMs);
 
-  async function getGroupedTxWindow(start: number, end: number): Promise<GroupedAddressTx[]> {
-    const groupedCacheKey = groupedAddressTxsCacheKey(address, { start, end });
+  async function getGroupedTxWindow(start: number, end: number, skipCoinbase: boolean): Promise<GroupedAddressTx[]> {
+    const groupedCacheKey = groupedAddressTxsCacheKey(address, { start, end }, skipCoinbase);
 
     const cachedGrouped = groupedAddressTxsCache.get(groupedCacheKey);
     if (cachedGrouped && nowMs - cachedGrouped.atMs <= GROUPED_ADDRESS_TXS_CACHE_TTL_MS) {
@@ -1288,7 +1297,16 @@ export async function getAddressTransactions(
         const deltasResp = await fluxdGetWithOptions<any>(
           env,
           'getaddressdeltas',
-          { params: JSON.stringify([{ addresses: [address], start, end }]) },
+          {
+            params: JSON.stringify([
+              {
+                addresses: [address],
+                start,
+                end,
+                ...(skipCoinbase ? { excludeCoinbase: true } : {}),
+              },
+            ]),
+          },
           { chainInfo: false }
         );
 
@@ -1299,6 +1317,9 @@ export async function getAddressTransactions(
         for (const row of rowsRaw) {
           const height = toNumber(row?.height, 0);
           const txIndex = toNumber(row?.blockindex ?? row?.tx_index ?? row?.txIndex, 0);
+          if (skipCoinbase && txIndex === 0) {
+            continue;
+          }
           const txid = toString(row?.txid);
           const satoshis = toNumber(row?.satoshis, 0);
 
@@ -1343,6 +1364,10 @@ export async function getAddressTransactions(
   }
 
   const page: Array<{ tx: GroupedAddressTx; blockHash: string; timestamp: number }> = [];
+  let scanned = 0;
+  let skippedCoinbase = 0;
+  let lastScannedTx: GroupedAddressTx | null = null;
+  let scanLimitHit = false;
 
   let nextCursor: { height: number; txIndex: number; txid: string } | undefined;
 
@@ -1386,9 +1411,9 @@ export async function getAddressTransactions(
     let windowEnd = Math.min(rangeObj.end, cursor.height);
     let didSeek = false;
 
-    while (page.length < limit && windowEnd >= rangeObj.start) {
+    while (page.length < limit && windowEnd >= rangeObj.start && scanned < scanLimit) {
       const windowStart = Math.max(rangeObj.start, windowEnd - windowBlocks + 1);
-      const groupedTxs = await getGroupedTxWindow(windowStart, windowEnd);
+      const groupedTxs = await getGroupedTxWindow(windowStart, windowEnd, excludeCoinbase);
 
       let startIndex = 0;
       if (!didSeek) {
@@ -1402,14 +1427,15 @@ export async function getAddressTransactions(
       }
 
       let scanIndex = startIndex;
-      let scanned = 0;
       while (page.length < limit && scanIndex < groupedTxs.length && scanned < scanLimit) {
         const tx = groupedTxs[scanIndex];
         scanIndex += 1;
+        scanned += 1;
+        lastScannedTx = tx;
         if (excludeCoinbase && tx.txIndex === 0) {
+          skippedCoinbase += 1;
           continue;
         }
-        scanned += 1;
 
         const header = await getBlockHeaderByHeightCached(env, tx.height);
         if (fromTs != null && header.timestamp < fromTs) continue;
@@ -1418,6 +1444,10 @@ export async function getAddressTransactions(
         page.push({ tx, blockHash: header.hash, timestamp: header.timestamp });
       }
 
+      if (scanIndex < groupedTxs.length && scanned >= scanLimit) {
+        scanLimitHit = true;
+        break;
+      }
       windowEnd = windowStart - 1;
     }
   } else {
@@ -1425,16 +1455,18 @@ export async function getAddressTransactions(
     let windowEnd = rangeObj.end;
     let remainingSkip = Math.max(0, params.offset ?? 0);
 
-    while (page.length < limit && windowEnd >= rangeObj.start) {
+    while (page.length < limit && windowEnd >= rangeObj.start && scanned < scanLimit) {
       const windowStart = Math.max(rangeObj.start, windowEnd - windowBlocks + 1);
-      const groupedTxs = await getGroupedTxWindow(windowStart, windowEnd);
+      const groupedTxs = await getGroupedTxWindow(windowStart, windowEnd, excludeCoinbase);
 
       let scanIndex = 0;
-      let scanned = 0;
       while (page.length < limit && scanIndex < groupedTxs.length && scanned < scanLimit) {
         const tx = groupedTxs[scanIndex];
         scanIndex += 1;
+        scanned += 1;
+        lastScannedTx = tx;
         if (excludeCoinbase && tx.txIndex === 0) {
+          skippedCoinbase += 1;
           continue;
         }
 
@@ -1443,7 +1475,6 @@ export async function getAddressTransactions(
           continue;
         }
 
-        scanned += 1;
         const header = await getBlockHeaderByHeightCached(env, tx.height);
         if (fromTs != null && header.timestamp < fromTs) continue;
         if (toTs != null && header.timestamp > toTs) continue;
@@ -1456,6 +1487,10 @@ export async function getAddressTransactions(
         page.push({ tx, blockHash: header.hash, timestamp: header.timestamp });
       }
 
+      if (scanIndex < groupedTxs.length && scanned >= scanLimit) {
+        scanLimitHit = true;
+        break;
+      }
       windowEnd = windowStart - 1;
     }
   }
@@ -1463,6 +1498,8 @@ export async function getAddressTransactions(
   const last = page.length > 0 ? page[page.length - 1].tx : null;
   if (last) {
     nextCursor = { height: last.height, txIndex: last.txIndex, txid: last.txid };
+  } else if (scanLimitHit && lastScannedTx) {
+    nextCursor = { height: lastScannedTx.height, txIndex: lastScannedTx.txIndex, txid: lastScannedTx.txid };
   }
 
   let total = 0;
@@ -1479,17 +1516,77 @@ export async function getAddressTransactions(
     total = minTotal;
   }
 
+  const toResponseTransaction = (
+    row: { tx: GroupedAddressTx; blockHash: string; timestamp: number },
+    io?: AddressTxIoSummary
+  ) => {
+    const isCoinbaseByIndex = row.tx.txIndex === 0;
+    const isCoinbase = io?.isCoinbase ?? isCoinbaseByIndex;
+    const fromAddresses = io?.fromAddresses ?? [];
+    const toAddresses = io?.toAddresses ?? (isCoinbase ? [address] : []);
+
+    const defaultToOthersSat = !isCoinbase && row.tx.net < 0n ? row.tx.sent : 0n;
+
+    return {
+      txid: row.tx.txid,
+      blockHeight: row.tx.height,
+      timestamp: row.timestamp,
+      blockHash: row.blockHash,
+      direction: row.tx.net < 0n ? 'sent' : 'received',
+      value: (row.tx.net < 0n ? (-row.tx.net) : row.tx.net).toString(),
+      receivedValue: row.tx.received.toString(),
+      sentValue: row.tx.sent.toString(),
+      feeValue: (io?.feeSat ?? 0n).toString(),
+      changeValue: (io?.changeSat ?? 0n).toString(),
+      toOthersValue: (io?.toOthersSat ?? defaultToOthersSat).toString(),
+      fromAddresses,
+      fromAddressCount: io?.fromAddressCount ?? fromAddresses.length,
+      toAddresses,
+      toAddressCount: io?.toAddressCount ?? toAddresses.length,
+      selfTransfer: row.tx.received > 0n && row.tx.sent > 0n,
+      confirmations: confirmationsFromHeight(tipHeight, row.tx.height > 0 ? row.tx.height : null),
+      isCoinbase,
+    };
+  };
+
+  if (!includeIo) {
+    return {
+      address,
+      transactions: page.map((row) => toResponseTransaction(row)),
+      total,
+      filteredTotal,
+      limit,
+      offset: params.offset,
+      nextCursor,
+      scanned,
+      skippedCoinbase,
+    };
+  }
+
   const pageTxById = new Map<string, GroupedAddressTx>();
   for (const row of page) {
     pageTxById.set(row.tx.txid, row.tx);
   }
 
   const txIoByTxid = new Map<string, AddressTxIoSummary>();
-  const pageTxids = new Set(page.map((row) => row.tx.txid));
-
-  const hashesNeeded = Array.from(new Set(page.map((row) => row.blockHash).filter((h) => typeof h === 'string' && h.length === 64)));
+  const pageTxids = new Set<string>();
   const txidsByBlockHash = new Map<string, string[]>();
   for (const row of page) {
+    if (row.tx.txIndex === 0) {
+      txIoByTxid.set(row.tx.txid, {
+        fromAddresses: [],
+        fromAddressCount: 0,
+        toAddresses: [address],
+        toAddressCount: 1,
+        feeSat: 0n,
+        changeSat: 0n,
+        toOthersSat: 0n,
+        isCoinbase: true,
+      });
+      continue;
+    }
+
+    pageTxids.add(row.tx.txid);
     const hash = row.blockHash;
     if (typeof hash !== 'string' || hash.length !== 64) continue;
     const list = txidsByBlockHash.get(hash);
@@ -1499,6 +1596,7 @@ export async function getAddressTransactions(
       txidsByBlockHash.set(hash, [row.tx.txid]);
     }
   }
+  const hashesNeeded = Array.from(txidsByBlockHash.keys());
 
   const maxConcurrency = 4;
   let hashCursor = 0;
@@ -1588,39 +1686,16 @@ export async function getAddressTransactions(
 
   return {
     address,
-    transactions: page.map((row) => {
-      const io = txIoByTxid.get(row.tx.txid);
-
-      const isCoinbase = io?.isCoinbase ?? false;
-      const fromAddresses = io?.fromAddresses ?? [];
-      const toAddresses = io?.toAddresses ?? [];
-
-      return {
-        txid: row.tx.txid,
-        blockHeight: row.tx.height,
-        timestamp: row.timestamp,
-        blockHash: row.blockHash,
-        direction: row.tx.net < 0n ? 'sent' : 'received',
-        value: (row.tx.net < 0n ? (-row.tx.net) : row.tx.net).toString(),
-        receivedValue: row.tx.received.toString(),
-        sentValue: row.tx.sent.toString(),
-        feeValue: (io?.feeSat ?? 0n).toString(),
-        changeValue: (io?.changeSat ?? 0n).toString(),
-        toOthersValue: (io?.toOthersSat ?? 0n).toString(),
-        fromAddresses,
-        fromAddressCount: io?.fromAddressCount ?? fromAddresses.length,
-        toAddresses,
-        toAddressCount: io?.toAddressCount ?? toAddresses.length,
-        selfTransfer: row.tx.received > 0n && row.tx.sent > 0n,
-        confirmations: confirmationsFromHeight(tipHeight, row.tx.height > 0 ? row.tx.height : null),
-        isCoinbase,
-      };
-    }),
+    transactions: page.map((row) =>
+      toResponseTransaction(row, txIoByTxid.get(row.tx.txid))
+    ),
     total,
     filteredTotal,
     limit,
     offset: params.offset,
     nextCursor,
+    scanned,
+    skippedCoinbase,
   };
 }
 

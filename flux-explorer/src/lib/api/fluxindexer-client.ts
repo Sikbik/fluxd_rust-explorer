@@ -217,6 +217,8 @@ interface FluxIndexerAddressTransactionsResponse {
     txIndex: number;
     txid: string;
   };
+  scanned?: number;
+  skippedCoinbase?: number;
 }
 
 export interface AddressTransactionsRequestOptions {
@@ -838,6 +840,7 @@ export class FluxIndexerAPI {
       cursorTxid?: string;
       exportToken?: string;
       excludeCoinbase?: boolean;
+      includeIo?: boolean;
     },
     requestOptions?: AddressTransactionsRequestOptions
   ): Promise<AddressTransactionsPage> {
@@ -884,6 +887,9 @@ export class FluxIndexerAPI {
       }
       if (params?.excludeCoinbase) {
         searchParams.excludeCoinbase = "1";
+      }
+      if (params?.includeIo === false) {
+        searchParams.includeIo = "0";
       }
 
       const requestConfig: Options = { searchParams };
@@ -952,6 +958,9 @@ export class FluxIndexerAPI {
         pagesTotal: pageSize > 0 ? Math.max(1, Math.ceil(filteredTotal / pageSize)) : 1,
         items,
         nextCursor,
+        scanned: typeof response.scanned === "number" ? response.scanned : items.length,
+        skippedCoinbase:
+          typeof response.skippedCoinbase === "number" ? response.skippedCoinbase : 0,
       };
     } catch (error) {
       throw new FluxIndexerAPIError(
@@ -976,6 +985,7 @@ export class FluxIndexerAPI {
       cursorTxid?: string;
       exportToken?: string;
       excludeCoinbase?: boolean;
+      includeIo?: boolean;
     },
     requestOptions?: AddressTransactionsRequestOptions
   ): Promise<AddressTransactionsPage> {
@@ -996,6 +1006,7 @@ export class FluxIndexerAPI {
       cursorTxid?: string;
       exportToken?: string;
       excludeCoinbase?: boolean;
+      includeIo?: boolean;
     }
   ): Promise<AddressTransactionsPage> {
     return this.fetchAddressTransactions(addresses, params, {

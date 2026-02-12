@@ -33,15 +33,16 @@ const ROOT_TX_TIMEOUT_MS = 12_000;
 const HOP_TX_TIMEOUT_MS = 4_200;
 const CENTER_LOOKUP_TIMEOUT_MS = 6_000;
 const BALANCE_LOOKUP_TIMEOUT_MS = 2_200;
-const BATCH_TX_TIMEOUT_MS = 2_200;
+const BATCH_TX_TIMEOUT_MS = 4_800;
+const SINGLE_TX_FALLBACK_TIMEOUT_MS = 2_200;
 const TX_COUNT_HINT_TIMEOUT_MS = 3_000;
 const MIN_TIMEOUT_MS = 300;
 
 const HEAVY_ADDRESS_TX_THRESHOLD = 100_000;
-const HEAVY_ROOT_NON_REWARD_LIMIT = 28;
-const HEAVY_ROOT_SCAN_CAP = 2_000;
+const HEAVY_ROOT_NON_REWARD_LIMIT = 32;
+const HEAVY_ROOT_SCAN_CAP = 48_000;
 const HEAVY_ROOT_PAGE_SIZE = 96;
-const HEAVY_ROOT_MAX_PAGES = 1;
+const HEAVY_ROOT_MAX_PAGES = 10;
 const HEAVY_TAIL_WINDOW = 250;
 const HEAVY_ROOT_MIN_SAMPLE_COUNT = 6;
 const HEAVY_TAIL_TIMEOUT_MS = 6_500;
@@ -372,7 +373,10 @@ function extractCounterpartiesFromFullTransaction(
 function isRewardLikeTransaction(tx: AddressTransactionSummary): boolean {
   if (tx.isCoinbase) return true;
   if (tx.direction !== "received") return false;
-  return (tx.fromAddresses?.length ?? 0) === 0;
+  const fromCount = tx.fromAddressCount ?? tx.fromAddresses?.length ?? 0;
+  const toCount = tx.toAddressCount ?? tx.toAddresses?.length ?? 0;
+  if (fromCount > 0) return false;
+  return toCount > 0;
 }
 
 type NonRewardWindow = {
@@ -389,6 +393,7 @@ async function fetchNonRewardTransactions(
     pageSize: number;
     maxPages?: number;
     apiExcludeCoinbase?: boolean;
+    apiIncludeIo?: boolean;
     startedAt: number;
     requestTimeoutMs: number;
   }
@@ -426,6 +431,7 @@ async function fetchNonRewardTransactions(
           cursorTxIndex: cursor?.txIndex,
           cursorTxid: cursor?.txid,
           excludeCoinbase: options.apiExcludeCoinbase ?? true,
+          includeIo: options.apiIncludeIo ?? true,
         },
         {
           timeoutMs: boundedTimeout(options.startedAt, options.requestTimeoutMs),
@@ -438,11 +444,15 @@ async function fetchNonRewardTransactions(
     pagesFetched += 1;
 
     const pageItems = page?.items ?? [];
-    if (pageItems.length === 0) {
-      break;
-    }
-
-    scanned += pageItems.length;
+    const pageScanned = Math.max(
+      0,
+      Math.trunc(page?.scanned ?? pageItems.length)
+    );
+    scanned += pageScanned > 0 ? pageScanned : pageSize;
+    excludedRewards += Math.max(
+      0,
+      Math.trunc(page?.skippedCoinbase ?? 0)
+    );
 
     for (const tx of pageItems) {
       if (isRewardLikeTransaction(tx)) {
@@ -456,13 +466,19 @@ async function fetchNonRewardTransactions(
       }
     }
 
-    if (pageItems.length < pageSize) break;
     const nextCursor = page?.nextCursor;
     if (!nextCursor) break;
     const nextCursorKey = `${nextCursor.height}:${nextCursor.txIndex}:${nextCursor.txid}`;
     if (nextCursorKey === lastCursor) break;
     lastCursor = nextCursorKey;
     cursor = nextCursor;
+
+    if (pageItems.length === 0) {
+      if (timeLeftMs(options.startedAt) <= MIN_TIMEOUT_MS) break;
+      continue;
+    }
+
+    if (pageItems.length < pageSize) break;
     if (timeLeftMs(options.startedAt) <= MIN_TIMEOUT_MS) break;
   }
 
@@ -480,6 +496,7 @@ async function fetchTailNonRewardTransactions(
     targetCount: number;
     tailWindowSize: number;
     apiExcludeCoinbase?: boolean;
+    apiIncludeIo?: boolean;
     startedAt: number;
     requestTimeoutMs: number;
   }
@@ -519,6 +536,7 @@ async function fetchTailNonRewardTransactions(
           from,
           to,
           excludeCoinbase: options.apiExcludeCoinbase ?? false,
+          includeIo: options.apiIncludeIo ?? true,
         },
         {
           timeoutMs: boundedTimeout(options.startedAt, options.requestTimeoutMs),
@@ -535,6 +553,10 @@ async function fetchTailNonRewardTransactions(
     }
 
     scanned += pageItems.length;
+    excludedRewards += Math.max(
+      0,
+      Math.trunc(page?.skippedCoinbase ?? 0)
+    );
     for (const tx of pageItems) {
       if (isRewardLikeTransaction(tx)) {
         excludedRewards += 1;
@@ -586,7 +608,7 @@ async function fetchAddressTxCountHint(
   try {
     const page = await FluxAPI.getAddressTransactions(
       [address],
-      { from: 0, to: 1 },
+      { from: 0, to: 1, includeIo: false },
       {
         timeoutMs: boundedTimeout(startedAt, TX_COUNT_HINT_TIMEOUT_MS),
         retryLimit: 0,
@@ -640,8 +662,22 @@ async function buildFullTransactionCounterpartyMap(
         );
       }
     } catch {
-      // Best effort. Summary data remains the fallback.
-      break;
+      for (const txid of chunk) {
+        try {
+          const fullTx = await withTimeout(
+            FluxAPI.getTransaction(txid),
+            boundedTimeout(startedAt, SINGLE_TX_FALLBACK_TIMEOUT_MS),
+            "full_tx_single"
+          );
+          if (!fullTx?.txid) continue;
+          map.set(
+            fullTx.txid,
+            extractCounterpartiesFromFullTransaction(fullTx, currentAddress)
+          );
+        } catch {
+          // Best effort per transaction fallback.
+        }
+      }
     }
   }
 
@@ -797,6 +833,7 @@ async function buildConstellation(address: string): Promise<AddressConstellation
         pageSize: rootPageSize,
         maxPages: rootMaxPages,
         apiExcludeCoinbase: true,
+        apiIncludeIo: true,
         startedAt,
         requestTimeoutMs: HEAVY_TAIL_TIMEOUT_MS,
       }).catch(() => emptyWindow);
@@ -808,6 +845,7 @@ async function buildConstellation(address: string): Promise<AddressConstellation
           targetCount: heavyTailTargetCount,
           tailWindowSize: HEAVY_TAIL_WINDOW,
           apiExcludeCoinbase: false,
+          apiIncludeIo: true,
           startedAt,
           requestTimeoutMs: HEAVY_TAIL_TIMEOUT_MS,
         }).catch(() => emptyWindow);
@@ -823,6 +861,7 @@ async function buildConstellation(address: string): Promise<AddressConstellation
             pageSize: rootPageSize,
             maxPages: rootMaxPages,
             apiExcludeCoinbase: false,
+            apiIncludeIo: true,
             startedAt,
             requestTimeoutMs: ROOT_TX_TIMEOUT_MS,
           }).catch(() => emptyWindow);
@@ -855,17 +894,15 @@ async function buildConstellation(address: string): Promise<AddressConstellation
   }
 
   let rootFallbackCounterparties = new Map<string, string[]>();
-  if (!heavyAddressMode) {
-    try {
-      rootFallbackCounterparties = await buildFullTransactionCounterpartyMap(
-        address,
-        rootTransactions,
-        startedAt,
-        true
-      );
-    } catch {
-      rootFallbackCounterparties = new Map<string, string[]>();
-    }
+  try {
+    rootFallbackCounterparties = await buildFullTransactionCounterpartyMap(
+      address,
+      rootTransactions,
+      startedAt,
+      true
+    );
+  } catch {
+    rootFallbackCounterparties = new Map<string, string[]>();
   }
 
   const nodeAgg = new Map<string, NodeAggregate>();
