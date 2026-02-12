@@ -12,25 +12,47 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 const ROOT_NON_REWARD_LIMIT = 90;
+const ADDRESS_TX_PAGE_HARD_LIMIT = 250;
 const ROOT_SCAN_CAP = 8_000;
 const ROOT_PAGE_SIZE = 220;
+const ROOT_MAX_PAGES = 4;
 const FIRST_HOP_LIMIT = 8;
 const MAX_HOP_REQUESTS = 3;
 const HOP_NON_REWARD_LIMIT = 24;
 const HOP_SCAN_CAP = 1_200;
 const HOP_PAGE_SIZE = 160;
+const HOP_MAX_PAGES = 2;
 const SECOND_HOP_LIMIT = 16;
 const SECOND_HOP_PER_PARENT = 3;
 const MAX_BALANCE_LOOKUPS = 10;
 const BALANCE_LOOKUP_CONCURRENCY = 4;
 const FULL_TX_BATCH_SIZE = 40;
 const FULL_TX_FALLBACK_TRIGGER_RATIO = 0.35;
-const BUILD_BUDGET_MS = 10_000;
-const ROOT_TX_TIMEOUT_MS = 5_000;
-const HOP_TX_TIMEOUT_MS = 2_800;
-const ADDRESS_LOOKUP_TIMEOUT_MS = 2_200;
+const BUILD_BUDGET_MS = 20_000;
+const ROOT_TX_TIMEOUT_MS = 12_000;
+const HOP_TX_TIMEOUT_MS = 4_200;
+const CENTER_LOOKUP_TIMEOUT_MS = 6_000;
+const BALANCE_LOOKUP_TIMEOUT_MS = 2_200;
 const BATCH_TX_TIMEOUT_MS = 2_200;
+const TX_COUNT_HINT_TIMEOUT_MS = 3_000;
 const MIN_TIMEOUT_MS = 300;
+
+const HEAVY_ADDRESS_TX_THRESHOLD = 100_000;
+const HEAVY_ROOT_NON_REWARD_LIMIT = 28;
+const HEAVY_ROOT_SCAN_CAP = 2_000;
+const HEAVY_ROOT_PAGE_SIZE = 96;
+const HEAVY_ROOT_MAX_PAGES = 1;
+const HEAVY_TAIL_WINDOW = 250;
+const HEAVY_ROOT_MIN_SAMPLE_COUNT = 6;
+const HEAVY_TAIL_TIMEOUT_MS = 6_500;
+const HEAVY_FIRST_HOP_LIMIT = 5;
+const HEAVY_MAX_HOP_REQUESTS = 0;
+const HEAVY_HOP_NON_REWARD_LIMIT = 10;
+const HEAVY_HOP_SCAN_CAP = 320;
+const HEAVY_HOP_PAGE_SIZE = 80;
+const HEAVY_HOP_MAX_PAGES = 1;
+const HEAVY_SECOND_HOP_LIMIT = 8;
+const HEAVY_SECOND_HOP_PER_PARENT = 2;
 
 const CACHE_TTL_MS = 30_000;
 const COALESCE_WINDOW_MS = 2_000;
@@ -365,6 +387,8 @@ async function fetchNonRewardTransactions(
     targetCount: number;
     scanCap: number;
     pageSize: number;
+    maxPages?: number;
+    apiExcludeCoinbase?: boolean;
     startedAt: number;
     requestTimeoutMs: number;
   }
@@ -376,8 +400,14 @@ async function fetchNonRewardTransactions(
     | { height: number; txIndex: number; txid: string }
     | undefined = undefined;
   let lastCursor = "";
+  const maxPages = Math.max(1, options.maxPages ?? Number.POSITIVE_INFINITY);
+  let pagesFetched = 0;
 
-  while (collected.length < options.targetCount && scanned < options.scanCap) {
+  while (
+    collected.length < options.targetCount &&
+    scanned < options.scanCap &&
+    pagesFetched < maxPages
+  ) {
     let pageSize = Math.min(options.pageSize, options.scanCap - scanned);
     if (pageSize <= 0) break;
     pageSize = Math.max(1, pageSize);
@@ -395,7 +425,7 @@ async function fetchNonRewardTransactions(
           cursorHeight: cursor?.height,
           cursorTxIndex: cursor?.txIndex,
           cursorTxid: cursor?.txid,
-          excludeCoinbase: true,
+          excludeCoinbase: options.apiExcludeCoinbase ?? true,
         },
         {
           timeoutMs: boundedTimeout(options.startedAt, options.requestTimeoutMs),
@@ -405,6 +435,7 @@ async function fetchNonRewardTransactions(
     } catch {
       break;
     }
+    pagesFetched += 1;
 
     const pageItems = page?.items ?? [];
     if (pageItems.length === 0) {
@@ -440,6 +471,132 @@ async function fetchNonRewardTransactions(
     scanned,
     excludedRewards,
   };
+}
+
+async function fetchTailNonRewardTransactions(
+  address: string,
+  totalTxCount: number,
+  options: {
+    targetCount: number;
+    tailWindowSize: number;
+    apiExcludeCoinbase?: boolean;
+    startedAt: number;
+    requestTimeoutMs: number;
+  }
+): Promise<NonRewardWindow> {
+  if (!Number.isFinite(totalTxCount) || totalTxCount <= 0) {
+    return { items: [], scanned: 0, excludedRewards: 0 };
+  }
+
+  const tailWindowSize = Math.max(options.targetCount, options.tailWindowSize);
+  let remainingWindow = tailWindowSize;
+  let windowEnd = Math.max(0, Math.trunc(totalTxCount));
+
+  const collected: AddressTransactionSummary[] = [];
+  let scanned = 0;
+  let excludedRewards = 0;
+
+  while (
+    windowEnd > 0 &&
+    remainingWindow > 0 &&
+    collected.length < options.targetCount
+  ) {
+    const pageSize = Math.max(
+      1,
+      Math.min(ADDRESS_TX_PAGE_HARD_LIMIT, remainingWindow, windowEnd)
+    );
+    const from = Math.max(0, windowEnd - pageSize);
+    const to = windowEnd;
+
+    let page:
+      | Awaited<ReturnType<typeof FluxAPI.getAddressTransactions>>
+      | null = null;
+
+    try {
+      page = await FluxAPI.getAddressTransactions(
+        [address],
+        {
+          from,
+          to,
+          excludeCoinbase: options.apiExcludeCoinbase ?? false,
+        },
+        {
+          timeoutMs: boundedTimeout(options.startedAt, options.requestTimeoutMs),
+          retryLimit: 0,
+        }
+      );
+    } catch {
+      break;
+    }
+
+    const pageItems = page?.items ?? [];
+    if (pageItems.length === 0) {
+      break;
+    }
+
+    scanned += pageItems.length;
+    for (const tx of pageItems) {
+      if (isRewardLikeTransaction(tx)) {
+        excludedRewards += 1;
+        continue;
+      }
+      collected.push(tx);
+      if (collected.length >= options.targetCount) {
+        break;
+      }
+    }
+
+    windowEnd = from;
+    remainingWindow -= pageSize;
+    if (timeLeftMs(options.startedAt) <= MIN_TIMEOUT_MS) {
+      break;
+    }
+  }
+
+  return {
+    items: collected,
+    scanned,
+    excludedRewards,
+  };
+}
+
+function mergeUniqueTransactions(
+  targetCount: number,
+  ...batches: AddressTransactionSummary[][]
+): AddressTransactionSummary[] {
+  const seen = new Set<string>();
+  const merged: AddressTransactionSummary[] = [];
+
+  for (const batch of batches) {
+    for (const tx of batch) {
+      if (!tx?.txid || seen.has(tx.txid)) continue;
+      seen.add(tx.txid);
+      merged.push(tx);
+      if (merged.length >= targetCount) return merged;
+    }
+  }
+
+  return merged;
+}
+
+async function fetchAddressTxCountHint(
+  address: string,
+  startedAt: number
+): Promise<number> {
+  try {
+    const page = await FluxAPI.getAddressTransactions(
+      [address],
+      { from: 0, to: 1 },
+      {
+        timeoutMs: boundedTimeout(startedAt, TX_COUNT_HINT_TIMEOUT_MS),
+        retryLimit: 0,
+      }
+    );
+    const total = Math.max(page?.totalItems ?? 0, page?.filteredTotal ?? 0);
+    return Number.isFinite(total) ? Math.max(0, Math.trunc(total)) : 0;
+  } catch {
+    return 0;
+  }
 }
 
 async function buildFullTransactionCounterpartyMap(
@@ -514,8 +671,12 @@ async function mapWithConcurrency<T>(
   return results;
 }
 
-async function fetchBalances(addresses: string[], startedAt: number): Promise<Map<string, number | null>> {
-  const targets = Array.from(new Set(addresses)).slice(0, MAX_BALANCE_LOOKUPS);
+async function fetchBalances(
+  addresses: string[],
+  startedAt: number,
+  maxLookups: number = MAX_BALANCE_LOOKUPS
+): Promise<Map<string, number | null>> {
+  const targets = Array.from(new Set(addresses)).slice(0, maxLookups);
   const pairs = await mapWithConcurrency(
     targets,
     BALANCE_LOOKUP_CONCURRENCY,
@@ -523,7 +684,7 @@ async function fetchBalances(addresses: string[], startedAt: number): Promise<Ma
       try {
         const info = await withTimeout(
           FluxAPI.getAddress(address),
-          boundedTimeout(startedAt, ADDRESS_LOOKUP_TIMEOUT_MS),
+          boundedTimeout(startedAt, BALANCE_LOOKUP_TIMEOUT_MS),
           "address_lookup"
         );
         return [address, Number.isFinite(info.balance) ? info.balance : null] as const;
@@ -589,40 +750,122 @@ async function buildConstellation(address: string): Promise<AddressConstellation
   const startedAt = Date.now();
   let centerInfo: Awaited<ReturnType<typeof FluxAPI.getAddress>> | null = null;
   let rootTransactions: AddressTransactionSummary[] = [];
+  let heavyAddressMode = false;
+
+  const emptyWindow: NonRewardWindow = {
+    items: [],
+    scanned: 0,
+    excludedRewards: 0,
+  };
 
   try {
-    const [centerResult, rootWindow] = await Promise.all([
-      withTimeout(
-        FluxAPI.getAddress(address),
-        boundedTimeout(startedAt, ADDRESS_LOOKUP_TIMEOUT_MS),
-        "center_lookup"
-      ).catch(() => null),
-      fetchNonRewardTransactions(address, {
-        targetCount: ROOT_NON_REWARD_LIMIT,
-        scanCap: ROOT_SCAN_CAP,
-        pageSize: ROOT_PAGE_SIZE,
+    const centerInfoPromise = withTimeout(
+      FluxAPI.getAddress(address),
+      boundedTimeout(startedAt, CENTER_LOOKUP_TIMEOUT_MS),
+      "center_lookup"
+    ).catch(() => null);
+
+    let txAppearances = await fetchAddressTxCountHint(address, startedAt);
+    if (txAppearances <= 0) {
+      const centerForCount = await centerInfoPromise;
+      const centerCount =
+        centerForCount && Number.isFinite(centerForCount.txApperances)
+          ? Math.max(0, Math.trunc(centerForCount.txApperances))
+          : 0;
+      txAppearances = centerCount;
+      centerInfo = centerForCount;
+    }
+
+    heavyAddressMode = txAppearances >= HEAVY_ADDRESS_TX_THRESHOLD;
+
+    const rootTargetCount = heavyAddressMode
+      ? HEAVY_ROOT_NON_REWARD_LIMIT
+      : ROOT_NON_REWARD_LIMIT;
+    const rootScanCap = heavyAddressMode ? HEAVY_ROOT_SCAN_CAP : ROOT_SCAN_CAP;
+    const rootPageSize = heavyAddressMode ? HEAVY_ROOT_PAGE_SIZE : ROOT_PAGE_SIZE;
+    const rootMaxPages = heavyAddressMode ? HEAVY_ROOT_MAX_PAGES : ROOT_MAX_PAGES;
+
+    if (heavyAddressMode) {
+      const heavyTailTargetCount = Math.min(
+        rootTargetCount,
+        HEAVY_ROOT_MIN_SAMPLE_COUNT
+      );
+
+      const prioritizedWindow = await fetchNonRewardTransactions(address, {
+        targetCount: heavyTailTargetCount,
+        scanCap: rootScanCap,
+        pageSize: rootPageSize,
+        maxPages: rootMaxPages,
+        apiExcludeCoinbase: true,
+        startedAt,
+        requestTimeoutMs: HEAVY_TAIL_TIMEOUT_MS,
+      }).catch(() => emptyWindow);
+
+      if (prioritizedWindow.items.length > 0) {
+        rootTransactions = prioritizedWindow.items;
+      } else {
+        const tailWindow = await fetchTailNonRewardTransactions(address, txAppearances, {
+          targetCount: heavyTailTargetCount,
+          tailWindowSize: HEAVY_TAIL_WINDOW,
+          apiExcludeCoinbase: false,
+          startedAt,
+          requestTimeoutMs: HEAVY_TAIL_TIMEOUT_MS,
+        }).catch(() => emptyWindow);
+
+        let recentWindow = emptyWindow;
+        if (
+          tailWindow.items.length < heavyTailTargetCount &&
+          timeLeftMs(startedAt) > MIN_TIMEOUT_MS * 2
+        ) {
+          recentWindow = await fetchNonRewardTransactions(address, {
+            targetCount: rootTargetCount,
+            scanCap: rootScanCap,
+            pageSize: rootPageSize,
+            maxPages: rootMaxPages,
+            apiExcludeCoinbase: false,
+            startedAt,
+            requestTimeoutMs: ROOT_TX_TIMEOUT_MS,
+          }).catch(() => emptyWindow);
+        }
+
+        rootTransactions = mergeUniqueTransactions(
+          rootTargetCount,
+          tailWindow.items,
+          recentWindow.items
+        );
+      }
+    } else {
+      const rootWindow = await fetchNonRewardTransactions(address, {
+        targetCount: rootTargetCount,
+        scanCap: rootScanCap,
+        pageSize: rootPageSize,
+        maxPages: rootMaxPages,
         startedAt,
         requestTimeoutMs: ROOT_TX_TIMEOUT_MS,
-      }).catch(() => ({ items: [] as AddressTransactionSummary[], scanned: 0, excludedRewards: 0 })),
-    ]);
+      }).catch(() => emptyWindow);
+      rootTransactions = rootWindow.items;
+    }
 
-    centerInfo = centerResult;
-    rootTransactions = rootWindow.items;
+    if (!centerInfo) {
+      centerInfo = await centerInfoPromise;
+    }
   } catch {
     centerInfo = null;
     rootTransactions = [];
   }
 
   let rootFallbackCounterparties = new Map<string, string[]>();
-  try {
-    rootFallbackCounterparties = await buildFullTransactionCounterpartyMap(
-      address,
-      rootTransactions,
-      startedAt,
-      true
-    );
-  } catch {
-    rootFallbackCounterparties = new Map<string, string[]>();
+  if (!heavyAddressMode) {
+    try {
+      rootFallbackCounterparties = await buildFullTransactionCounterpartyMap(
+        address,
+        rootTransactions,
+        startedAt,
+        true
+      );
+    } catch {
+      rootFallbackCounterparties = new Map<string, string[]>();
+    }
   }
 
   const nodeAgg = new Map<string, NodeAggregate>();
@@ -669,20 +912,32 @@ async function buildConstellation(address: string): Promise<AddressConstellation
     }
   }
 
+  const firstHopLimit = heavyAddressMode ? HEAVY_FIRST_HOP_LIMIT : FIRST_HOP_LIMIT;
+  const maxHopRequests = heavyAddressMode ? HEAVY_MAX_HOP_REQUESTS : MAX_HOP_REQUESTS;
+  const hopTargetCount = heavyAddressMode ? HEAVY_HOP_NON_REWARD_LIMIT : HOP_NON_REWARD_LIMIT;
+  const hopScanCap = heavyAddressMode ? HEAVY_HOP_SCAN_CAP : HOP_SCAN_CAP;
+  const hopPageSize = heavyAddressMode ? HEAVY_HOP_PAGE_SIZE : HOP_PAGE_SIZE;
+  const hopMaxPages = heavyAddressMode ? HEAVY_HOP_MAX_PAGES : HOP_MAX_PAGES;
+  const secondHopLimit = heavyAddressMode ? HEAVY_SECOND_HOP_LIMIT : SECOND_HOP_LIMIT;
+  const secondHopPerParent = heavyAddressMode
+    ? HEAVY_SECOND_HOP_PER_PARENT
+    : SECOND_HOP_PER_PARENT;
+
   const firstHopCandidates = Array.from(firstHopAgg.entries())
     .sort((a, b) => scoreAggregate(b[1]) - scoreAggregate(a[1]));
-  const firstHopSelected = firstHopCandidates.slice(0, FIRST_HOP_LIMIT);
+  const firstHopSelected = firstHopCandidates.slice(0, firstHopLimit);
   const firstHopSet = new Set(firstHopSelected.map(([id]) => id));
 
-  const hopTargets = firstHopSelected.slice(0, MAX_HOP_REQUESTS).map(([id]) => id);
+  const hopTargets = firstHopSelected.slice(0, maxHopRequests).map(([id]) => id);
   let hopRequests = 0;
 
   await mapWithConcurrency(hopTargets, 3, async (hopAddress) => {
     try {
       const window = await fetchNonRewardTransactions(hopAddress, {
-        targetCount: HOP_NON_REWARD_LIMIT,
-        scanCap: HOP_SCAN_CAP,
-        pageSize: HOP_PAGE_SIZE,
+        targetCount: hopTargetCount,
+        scanCap: hopScanCap,
+        pageSize: hopPageSize,
+        maxPages: hopMaxPages,
         startedAt,
         requestTimeoutMs: HOP_TX_TIMEOUT_MS,
       });
@@ -762,12 +1017,12 @@ async function buildConstellation(address: string): Promise<AddressConstellation
   }
 
   let progress = true;
-  while (selectedSecond.size < SECOND_HOP_LIMIT && progress) {
+  while (selectedSecond.size < secondHopLimit && progress) {
     progress = false;
 
     for (const parent of hopTargets) {
       const used = parentSelectionCount.get(parent) ?? 0;
-      if (used >= SECOND_HOP_PER_PARENT) continue;
+      if (used >= secondHopPerParent) continue;
 
       const list = sortedByParent.get(parent) ?? [];
       let pointer = parentPointer.get(parent) ?? 0;
@@ -784,20 +1039,20 @@ async function buildConstellation(address: string): Promise<AddressConstellation
       parentPointer.set(parent, pointer + 1);
       progress = true;
 
-      if (selectedSecond.size >= SECOND_HOP_LIMIT) {
+      if (selectedSecond.size >= secondHopLimit) {
         break;
       }
     }
   }
 
-  if (selectedSecond.size < SECOND_HOP_LIMIT) {
+  if (selectedSecond.size < secondHopLimit) {
     const globalSecond = Array.from(secondHopAgg.entries())
       .sort((a, b) => scoreAggregate(b[1]) - scoreAggregate(a[1]))
       .map(([id]) => id);
     for (const candidate of globalSecond) {
       if (selectedSecond.has(candidate)) continue;
       selectedSecond.add(candidate);
-      if (selectedSecond.size >= SECOND_HOP_LIMIT) break;
+      if (selectedSecond.size >= secondHopLimit) break;
     }
   }
 
@@ -810,7 +1065,9 @@ async function buildConstellation(address: string): Promise<AddressConstellation
     ...firstHopSelected.map(([id]) => id),
     ...Array.from(selectedSecond),
   ];
-  const balances = await fetchBalances(nodesForBalance, startedAt);
+  const balances = heavyAddressMode
+    ? new Map<string, number | null>()
+    : await fetchBalances(nodesForBalance, startedAt, MAX_BALANCE_LOOKUPS);
   if (centerInfo && Number.isFinite(centerInfo.balance)) {
     balances.set(address, centerInfo.balance);
   }
@@ -851,9 +1108,9 @@ async function buildConstellation(address: string): Promise<AddressConstellation
       edgeCount: edges.length,
     },
     truncated: {
-      firstHop: firstHopCandidates.length > FIRST_HOP_LIMIT,
-      secondHop: secondHopAgg.size > SECOND_HOP_LIMIT,
-      requests: firstHopSelected.length > MAX_HOP_REQUESTS,
+      firstHop: firstHopCandidates.length > firstHopLimit,
+      secondHop: secondHopAgg.size > secondHopLimit,
+      requests: firstHopSelected.length > maxHopRequests,
     },
   };
 }
