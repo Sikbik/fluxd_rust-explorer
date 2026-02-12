@@ -11,7 +11,7 @@ import {
   useFluxInstancesCount,
   useFluxNodeCount,
 } from "@/lib/api/hooks/useFluxStats";
-import { getRewardLabel } from "@/lib/block-rewards";
+import { getExpectedBlockReward, getRewardLabel } from "@/lib/block-rewards";
 import type { BlockSummary } from "@/types/flux-api";
 
 type MetricSignal = {
@@ -541,15 +541,21 @@ function RailPacketNode({
         <div className="mt-2 space-y-1.5 text-[11px] text-[var(--flux-text-secondary)]">
           <div className="flex items-center justify-between">
             <span>Total TX</span>
-            <span className="font-mono text-white">{formatInteger(packet.totalTx)}</span>
+            <span className="font-mono text-white">
+              {isFuture ? "-" : formatInteger(packet.totalTx)}
+            </span>
           </div>
           <div className="flex items-center justify-between">
             <span>Normal</span>
-            <span className="font-mono text-white">{formatInteger(packet.normalTx)}</span>
+            <span className="font-mono text-white">
+              {isFuture ? "-" : formatInteger(packet.normalTx)}
+            </span>
           </div>
           <div className="flex items-center justify-between">
             <span>Fluxnode</span>
-            <span className="font-mono text-white">{formatInteger(packet.fluxnodeTx)}</span>
+            <span className="font-mono text-white">
+              {isFuture ? "-" : formatInteger(packet.fluxnodeTx)}
+            </span>
           </div>
           <div className="flex items-center justify-between">
             <span>{isFuture ? "ETA" : "Age"}</span>
@@ -753,6 +759,83 @@ export function RealtimeSignalHero() {
   const isWarmingUp = homeSnapshot?.warmingUp === true || homeSnapshot?.degraded === true;
   const retryAfter = Math.max(1, homeSnapshot?.retryAfterSeconds ?? 3);
   const latestReward = homeSnapshot?.dashboard?.latestRewards?.[0] ?? null;
+  const rewardOutputs = latestReward?.outputs.filter((output) => output.value > 0).slice(0, 8) ?? [];
+  const rewardDispatchStats = (() => {
+    if (!latestReward) return null;
+    const outputs = latestReward.outputs.filter((output) => output.value > 0);
+    if (outputs.length === 0) {
+      return {
+        outputCount: 0,
+        largest: 0,
+        smallest: 0,
+        age: "syncing",
+      };
+    }
+    const sorted = [...outputs].sort((first, second) => second.value - first.value);
+    return {
+      outputCount: outputs.length,
+      largest: sorted[0]?.value ?? 0,
+      smallest: sorted[sorted.length - 1]?.value ?? 0,
+      age: `${formatTimeAgo(latestReward.timestamp)} ago`,
+    };
+  })();
+  const rewardSplit = (() => {
+    if (!latestReward) return [];
+    const grouped = new Map<string, number>();
+    for (const output of latestReward.outputs) {
+      if (output.value <= 0) continue;
+      const type = getRewardLabel(output.value, latestReward.height).type;
+      grouped.set(type, (grouped.get(type) ?? 0) + output.value);
+    }
+    const safeTotal =
+      latestReward.totalReward > 0
+        ? latestReward.totalReward
+        : Array.from(grouped.values()).reduce((sum, value) => sum + value, 0);
+    return Array.from(grouped.entries())
+      .map(([type, value]) => ({
+        type,
+        value,
+        percent: safeTotal > 0 ? (value / safeTotal) * 100 : 0,
+      }))
+      .sort((first, second) => second.value - first.value);
+  })();
+  const rewardHistory = homeSnapshot?.dashboard?.latestRewards?.slice(0, 6) ?? [];
+  const rewardFeeProfile = (() => {
+    if (rewardHistory.length === 0) return null;
+    const points = rewardHistory.map((item) => {
+      const baseReward = getExpectedBlockReward(item.height);
+      const feeReward = Math.max(0, item.totalReward - baseReward);
+      return {
+        hash: item.hash,
+        height: item.height,
+        totalReward: item.totalReward,
+        baseReward,
+        feeReward,
+      };
+    });
+    const current = points[0];
+    if (!current) return null;
+    const feeValues = points.map((point) => point.feeReward);
+    const averageFee =
+      feeValues.reduce((sum, value) => sum + value, 0) / feeValues.length;
+    const maxFee = Math.max(0.0001, ...feeValues);
+    const feeShare = current.totalReward > 0
+      ? (current.feeReward / current.totalReward) * 100
+      : 0;
+    return {
+      currentFee: current.feeReward,
+      baseReward: current.baseReward,
+      averageFee,
+      maxFee,
+      feeShare,
+      points: points.map((point) => ({
+        hash: point.hash,
+        height: point.height,
+        feeReward: point.feeReward,
+        ratio: point.feeReward / maxFee,
+      })),
+    };
+  })();
 
   const tx24h = dashboardStats?.transactions24h ?? null;
   const tx24hNormal = dashboardStats?.transactions24hNormal ?? null;
@@ -848,6 +931,42 @@ export function RealtimeSignalHero() {
         inboundDuration: "2.2s",
       };
   const blockFeed = latestBlocks.slice(0, 8);
+  const feedPulse = (() => {
+    if (blockFeed.length === 0) return null;
+    const bars = blockFeed.map((block, index) => {
+      const fluxnodeTx = Math.max(0, block.nodeConfirmationCount ?? 0);
+      const normalTx = Math.max(
+        0,
+        block.regularTxCount ?? Math.max(0, (block.txlength ?? 0) - fluxnodeTx)
+      );
+      const totalTx = Math.max(0, block.txlength ?? normalTx + fluxnodeTx);
+      return {
+        key: block.hash,
+        totalTx,
+        normalTx,
+        fluxnodeTx,
+        tone: BLOCK_TONES[(block.height + index) % BLOCK_TONES.length],
+      };
+    });
+    const totalTx = bars.reduce((sum, bar) => sum + bar.totalTx, 0);
+    const normalTx = bars.reduce((sum, bar) => sum + bar.normalTx, 0);
+    const fluxnodeTx = bars.reduce((sum, bar) => sum + bar.fluxnodeTx, 0);
+    const maxTotal = Math.max(1, ...bars.map((bar) => bar.totalTx));
+    const newest = blockFeed[0]?.time ?? null;
+    const oldest = blockFeed[blockFeed.length - 1]?.time ?? null;
+    const feedWindowSeconds =
+      newest != null && oldest != null ? Math.max(0, newest - oldest) : null;
+    return {
+      bars,
+      totalTx,
+      normalTx,
+      fluxnodeTx,
+      normalRatio: totalTx > 0 ? (normalTx / totalTx) * 100 : 0,
+      fluxnodeRatio: totalTx > 0 ? (fluxnodeTx / totalTx) * 100 : 0,
+      maxTotal,
+      feedWindowSeconds,
+    };
+  })();
   const currentPacket =
     railPackets.find((packet) => packet.stage === "current") ?? railPackets[CENTER_SLOT] ?? null;
   const railLeftTelemetry = [
@@ -861,9 +980,9 @@ export function RealtimeSignalHero() {
 
   return (
     <section className="relative isolate overflow-visible rounded-[40px] px-3 py-8 sm:px-6 sm:py-10 md:px-8 lg:px-10">
-      <div className="absolute inset-0 rounded-[40px] bg-[linear-gradient(180deg,rgba(3,9,25,0.82),rgba(2,8,22,0.96))]" />
-      <div className="absolute inset-0 rounded-[40px] bg-[radial-gradient(120%_120%_at_50%_-25%,rgba(83,240,255,0.26),transparent_52%),radial-gradient(110%_90%_at_100%_0%,rgba(183,121,255,0.3),transparent_46%),radial-gradient(100%_80%_at_0%_100%,rgba(47,154,255,0.2),transparent_52%)]" />
-      <div className="absolute inset-0 rounded-[40px] flux-home-grid-motion opacity-55" />
+      <div className="pointer-events-none absolute inset-0 rounded-[40px] bg-[linear-gradient(180deg,rgba(3,9,25,0.82),rgba(2,8,22,0.96))]" />
+      <div className="pointer-events-none absolute inset-0 rounded-[40px] bg-[radial-gradient(120%_120%_at_50%_-25%,rgba(83,240,255,0.26),transparent_52%),radial-gradient(110%_90%_at_100%_0%,rgba(183,121,255,0.3),transparent_46%),radial-gradient(100%_80%_at_0%_100%,rgba(47,154,255,0.2),transparent_52%)]" />
+      <div className="pointer-events-none absolute inset-0 rounded-[40px] flux-home-grid-motion opacity-55" />
       <div className="pointer-events-none absolute inset-y-[18%] -left-[13%] hidden w-[22%] rounded-full bg-[radial-gradient(circle,rgba(56,232,255,0.14),transparent_72%)] blur-3xl xl:block" />
       <div className="pointer-events-none absolute inset-y-[12%] -right-[12%] hidden w-[22%] rounded-full bg-[radial-gradient(circle,rgba(183,121,255,0.16),transparent_72%)] blur-3xl xl:block" />
       <div className="pointer-events-none absolute left-0 top-[24%] hidden h-[52%] w-px bg-gradient-to-b from-transparent via-white/40 to-transparent xl:block" />
@@ -940,9 +1059,9 @@ export function RealtimeSignalHero() {
         <div className="relative mt-8 px-0 py-7 sm:mt-10 sm:py-10">
           <div className="pointer-events-none absolute inset-x-[-16%] top-[12%] h-[84%] bg-[radial-gradient(70%_90%_at_50%_40%,rgba(63,210,255,0.2),transparent_78%)] blur-2xl" />
           <div className="pointer-events-none absolute inset-x-[-14%] top-[20%] h-[70%] bg-[linear-gradient(95deg,rgba(56,232,255,0.08),rgba(183,121,255,0.08),rgba(56,232,255,0.08))] blur-xl" />
-          <div className="absolute inset-0 bg-[linear-gradient(90deg,transparent,rgba(120,200,255,0.09),transparent)]" style={{ animation: "flux-energy-slide 4.6s linear infinite" }} />
-          <div className="absolute inset-x-[-10%] top-1/2 h-[2px] -translate-y-1/2 bg-[linear-gradient(90deg,transparent_0%,rgba(88,239,255,0.92)_20%,rgba(238,170,255,0.95)_50%,rgba(88,239,255,0.92)_80%,transparent_100%)]" />
-          <div className="absolute inset-x-[-12%] top-1/2 h-8 -translate-y-1/2 bg-[linear-gradient(90deg,transparent,rgba(88,239,255,0.5),rgba(238,170,255,0.54),rgba(88,239,255,0.5),transparent)] blur-md" style={{ animation: "flux-energy-slide 2.2s linear infinite" }} />
+          <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(90deg,transparent,rgba(120,200,255,0.09),transparent)]" style={{ animation: "flux-energy-slide 4.6s linear infinite" }} />
+          <div className="pointer-events-none absolute inset-x-[-10%] top-1/2 h-[2px] -translate-y-1/2 bg-[linear-gradient(90deg,transparent_0%,rgba(88,239,255,0.92)_20%,rgba(238,170,255,0.95)_50%,rgba(88,239,255,0.92)_80%,transparent_100%)]" />
+          <div className="pointer-events-none absolute inset-x-[-12%] top-1/2 h-8 -translate-y-1/2 bg-[linear-gradient(90deg,transparent,rgba(88,239,255,0.5),rgba(238,170,255,0.54),rgba(88,239,255,0.5),transparent)] blur-md" style={{ animation: "flux-energy-slide 2.2s linear infinite" }} />
           <div
             className="pointer-events-none absolute right-1/2 top-1/2 -translate-y-1/2 bg-[linear-gradient(90deg,transparent,rgba(98,244,255,0.78),rgba(199,151,255,0.45),transparent)] blur-[0.5px] sm:blur-[1px]"
             style={{
@@ -968,12 +1087,6 @@ export function RealtimeSignalHero() {
               opacity: compactMode ? 0.44 : 0.7,
             }}
           />
-          <div className="pointer-events-none absolute left-[19%] top-[37%] hidden rounded-full border border-white/10 bg-[rgba(6,16,36,0.5)] px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.16em] text-white/45 md:block">
-            Verified Flow
-          </div>
-          <div className="pointer-events-none absolute right-[19%] top-[37%] hidden rounded-full border border-white/10 bg-[rgba(6,16,36,0.5)] px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.16em] text-white/45 md:block">
-            Inbound Queue
-          </div>
           <div
             key={railPulseToken}
             className="pointer-events-none absolute inset-x-[-15%] top-1/2 h-16 -translate-y-1/2 opacity-0 blur-[3px]"
@@ -983,8 +1096,8 @@ export function RealtimeSignalHero() {
               animation: "flux-rail-burst 820ms ease-out",
             }}
           />
-          <div className="absolute inset-x-[7%] top-[58%] h-24 rounded-[100%] border-t border-white/25 opacity-70" style={{ animation: "flux-arc-breathe 3.4s ease-in-out infinite" }} />
-          <div className="absolute inset-x-[18%] top-[43%] h-20 rounded-[100%] border-t border-white/15 opacity-45" style={{ animation: "flux-arc-breathe 3s ease-in-out infinite 800ms" }} />
+          <div className="pointer-events-none absolute inset-x-[7%] top-[58%] h-24 rounded-[100%] border-t border-white/25 opacity-70" style={{ animation: "flux-arc-breathe 3.4s ease-in-out infinite" }} />
+          <div className="pointer-events-none absolute inset-x-[18%] top-[43%] h-20 rounded-[100%] border-t border-white/15 opacity-45" style={{ animation: "flux-arc-breathe 3s ease-in-out infinite 800ms" }} />
 
           <div className="relative h-[260px] overflow-visible sm:h-[296px]">
             {visibleSparkOffsets.map((offset, index) => (
@@ -1072,9 +1185,8 @@ export function RealtimeSignalHero() {
               </div>
             </div>
 
-            <div className="relative grid gap-4 sm:gap-5 lg:grid-cols-[1.05fr_0.95fr]">
-              <div className="pointer-events-none absolute inset-y-3 left-1/2 hidden w-px -translate-x-1/2 bg-gradient-to-b from-transparent via-white/15 to-transparent lg:block" />
-              <div className="relative overflow-hidden rounded-[22px] border border-white/[0.08] bg-[linear-gradient(140deg,rgba(8,20,42,0.34),rgba(5,13,30,0.08))] px-3 py-2.5 sm:px-3.5">
+            <div className="relative grid gap-4 sm:gap-5 lg:grid-cols-2">
+              <div className="relative h-full overflow-hidden rounded-[22px] border border-white/[0.08] bg-[linear-gradient(140deg,rgba(8,20,42,0.34),rgba(5,13,30,0.08))] px-3 py-2.5 sm:px-3.5">
                 <div className="pointer-events-none absolute inset-x-5 top-0 h-px bg-gradient-to-r from-transparent via-white/15 to-transparent" />
                 <div className="mb-2.5 flex items-end justify-between">
                   <p className="text-[9px] uppercase tracking-[0.18em] text-[var(--flux-text-dim)] sm:text-[10px] sm:tracking-[0.2em]">
@@ -1084,11 +1196,97 @@ export function RealtimeSignalHero() {
                     View All
                   </Link>
                 </div>
+                {feedPulse ? (
+                  <div className="relative mb-2.5 overflow-hidden rounded-lg border border-white/[0.08] bg-[linear-gradient(132deg,rgba(10,22,44,0.46),rgba(7,15,33,0.22))] px-2.5 py-2">
+                    <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(95%_140%_at_0%_0%,rgba(56,232,255,0.12),transparent_60%),radial-gradient(95%_140%_at_100%_100%,rgba(168,85,247,0.14),transparent_64%)]" />
+                    <div className="relative grid gap-2.5 sm:grid-cols-[1.05fr_0.95fr]">
+                      <div>
+                        <p className="text-[9px] uppercase tracking-[0.16em] text-[var(--flux-text-dim)]">
+                          Feed Mix
+                        </p>
+                        <div className="mt-1.5 space-y-1.5">
+                          <div>
+                            <div className="flex items-center justify-between text-[10px]">
+                              <span className="font-mono uppercase tracking-[0.08em] text-white/75">
+                                Normal
+                              </span>
+                              <span className="font-mono text-[var(--flux-cyan)]">
+                                {feedPulse.normalRatio.toFixed(1)}%
+                              </span>
+                            </div>
+                            <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-white/10">
+                              <div
+                                className="h-full rounded-full bg-[linear-gradient(90deg,rgba(56,232,255,0.9),rgba(99,210,255,0.75))]"
+                                style={{ width: `${Math.max(4, feedPulse.normalRatio)}%` }}
+                              />
+                            </div>
+                          </div>
+                          <div>
+                            <div className="flex items-center justify-between text-[10px]">
+                              <span className="font-mono uppercase tracking-[0.08em] text-white/75">
+                                Fluxnode
+                              </span>
+                              <span className="font-mono text-[rgb(202,163,255)]">
+                                {feedPulse.fluxnodeRatio.toFixed(1)}%
+                              </span>
+                            </div>
+                            <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-white/10">
+                              <div
+                                className="h-full rounded-full bg-[linear-gradient(90deg,rgba(168,85,247,0.9),rgba(238,170,255,0.75))]"
+                                style={{ width: `${Math.max(4, feedPulse.fluxnodeRatio)}%` }}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="rounded-md border border-white/[0.08] bg-[linear-gradient(140deg,rgba(11,34,62,0.24),rgba(8,20,42,0.08))] px-2 py-1.5 backdrop-blur-[1px]">
+                        <p className="text-[9px] uppercase tracking-[0.16em] text-[var(--flux-text-dim)]">
+                          Throughput Wave
+                        </p>
+                        <div className="mt-1.5 flex h-8 items-end gap-1">
+                          {feedPulse.bars.map((bar, barIndex) => (
+                            <span
+                              key={`${bar.key}-bar`}
+                              className="w-[5px] rounded-full bg-[linear-gradient(180deg,rgba(255,255,255,0.92),rgba(255,255,255,0.15))]"
+                              style={{
+                                height: `${Math.max(20, Math.round((bar.totalTx / feedPulse.maxTotal) * 100))}%`,
+                                boxShadow: `0 0 10px ${bar.tone.glow}`,
+                                animation: "flux-wave-pulse 1400ms ease-in-out infinite",
+                                animationDelay: `${barIndex * 90}ms`,
+                              }}
+                            />
+                          ))}
+                        </div>
+                        <p className="mt-1 font-mono text-[10px] text-[var(--flux-text-secondary)]">
+                          {formatInteger(feedPulse.totalTx)} tx / {formatInteger(blockFeed.length)} blocks
+                        </p>
+                        <p className="font-mono text-[10px] text-[var(--flux-cyan)]">
+                          Window{" "}
+                          {feedPulse.feedWindowSeconds != null
+                            ? `${formatInteger(feedPulse.feedWindowSeconds)}s`
+                            : "syncing"}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
                 <div className="grid gap-1.5">
                   {blockFeed.length > 0 ? (
                     blockFeed.map((block, rowIndex) => {
-                      const normalTx = block.regularTxCount ?? block.txlength ?? 0;
-                      const fluxnodeTx = block.nodeConfirmationCount ?? 0;
+                      const fluxnodeTx = Math.max(0, block.nodeConfirmationCount ?? 0);
+                      const normalTx = Math.max(
+                        0,
+                        block.regularTxCount ?? Math.max(0, (block.txlength ?? 0) - fluxnodeTx)
+                      );
+                      const totalTx = Math.max(1, block.txlength ?? normalTx + fluxnodeTx);
+                      const normalShare = Math.max(
+                        0,
+                        Math.min(100, (normalTx / totalTx) * 100)
+                      );
+                      const fluxnodeShare = Math.max(
+                        0,
+                        Math.min(100, (fluxnodeTx / totalTx) * 100)
+                      );
                       const ageLabel =
                         block.time != null ? `${formatTimeAgo(block.time)} ago` : "syncing";
                       return (
@@ -1108,6 +1306,33 @@ export function RealtimeSignalHero() {
                             <p className="truncate text-[10px] text-[var(--flux-text-muted)] sm:text-[11px]">
                               {block.hash.slice(0, 14)}...{block.hash.slice(-8)}
                             </p>
+                            <div className="mt-1 flex items-center gap-1.5">
+                              <div className="relative h-1.5 min-w-[98px] flex-1 overflow-hidden rounded-full border border-white/10 bg-white/10">
+                                <span
+                                  className="absolute inset-y-0 left-0 bg-[linear-gradient(90deg,rgba(56,232,255,0.95),rgba(99,210,255,0.72))]"
+                                  style={{ width: `${Math.max(4, normalShare)}%` }}
+                                />
+                                <span
+                                  className="absolute inset-y-0 right-0 bg-[linear-gradient(90deg,rgba(168,85,247,0.86),rgba(238,170,255,0.72))]"
+                                  style={{ width: `${Math.max(4, fluxnodeShare)}%` }}
+                                />
+                                <span
+                                  key={`${block.hash}-seam-${railPulseToken}`}
+                                  className="pointer-events-none absolute inset-y-[-1px] w-4 rounded-full bg-[linear-gradient(90deg,transparent,rgba(255,255,255,0.85),transparent)] opacity-0"
+                                  style={{
+                                    left: `${Math.max(0, Math.min(96, normalShare))}%`,
+                                    transform: "translateX(-50%)",
+                                    animation: "flux-feed-seam-burst 760ms cubic-bezier(0.16,1,0.3,1)",
+                                  }}
+                                />
+                              </div>
+                              <span className="font-mono text-[9px] uppercase tracking-[0.08em] text-white/50">
+                                {formatInteger(totalTx)} tx
+                              </span>
+                            </div>
+                            <p className="mt-0.5 font-mono text-[9px] text-white/45">
+                              {normalShare.toFixed(0)}% normal · {fluxnodeShare.toFixed(0)}% fluxnode
+                            </p>
                           </div>
                           <div className="text-right text-[10px] text-[var(--flux-text-secondary)] sm:text-[11px]">
                             <p className="font-mono text-[var(--flux-cyan)]">{ageLabel}</p>
@@ -1125,9 +1350,9 @@ export function RealtimeSignalHero() {
                 </div>
               </div>
 
-              <div className="relative overflow-hidden rounded-[22px] border border-white/[0.08] bg-[linear-gradient(145deg,rgba(7,18,39,0.34),rgba(7,15,34,0.08))] px-3 py-3 sm:px-3.5">
+              <div className="relative h-full overflow-hidden rounded-[22px] border border-white/[0.08] bg-[linear-gradient(145deg,rgba(7,18,39,0.34),rgba(7,15,34,0.08))] px-3 py-3 sm:px-3.5 sm:py-3.5">
                 <div className="pointer-events-none absolute inset-x-5 top-0 h-px bg-gradient-to-r from-transparent via-white/15 to-transparent" />
-                <div className="mb-2.5 flex items-end justify-between gap-2">
+                <div className="mb-3 flex items-end justify-between gap-2">
                   <p className="text-[9px] uppercase tracking-[0.18em] text-[var(--flux-text-dim)] sm:text-[10px] sm:tracking-[0.2em]">
                     Reward Dispatch
                   </p>
@@ -1138,45 +1363,236 @@ export function RealtimeSignalHero() {
                   ) : null}
                 </div>
                 {latestReward ? (
-                  <div className="space-y-2.5">
-                    <div className="rounded-lg border border-white/[0.08] bg-[linear-gradient(140deg,rgba(8,16,36,0.46),rgba(8,16,36,0.22))] px-3 py-2">
+                  <div className="flex h-full min-h-[372px] flex-col gap-3.5">
+                    <div className="rounded-[18px] border border-white/[0.07] bg-[linear-gradient(140deg,rgba(8,16,36,0.46),rgba(8,16,36,0.22))] px-3 py-3">
                       <p className="font-mono text-sm text-white">
                         Block #{latestReward.height.toLocaleString()}
                       </p>
-                      <p className="mt-1 text-xs text-[var(--flux-text-muted)]">
+                      <p className="mt-1.5 text-xs text-[var(--flux-text-muted)]">
                         Total reward {latestReward.totalReward.toFixed(2)} FLUX
                       </p>
                     </div>
 
-                    {latestReward.outputs
-                      .filter((output) => output.value > 0)
-                      .slice(0, 5)
-                      .map((output, outputIndex) => {
-                        const rewardLabel = getRewardLabel(output.value, latestReward.height);
-                        const address = output.address ?? "unknown";
-                        return (
-                          <Link
-                            key={`${latestReward.height}-${outputIndex}-${address}`}
-                            href={address === "unknown" ? "/blocks" : `/address/${address}`}
-                            className="group relative flex items-center justify-between rounded-lg px-2.5 py-2 transition-[transform,color] hover:translate-x-1"
-                          >
-                            {outputIndex > 0 ? (
-                              <span className="pointer-events-none absolute inset-x-2 top-0 h-px bg-white/8" />
-                            ) : null}
-                            <div className="min-w-0">
-                              <p className="truncate text-[10px] uppercase tracking-[0.14em] text-[var(--flux-text-muted)] sm:text-[11px]">
-                                {rewardLabel.type}
-                              </p>
-                              <p className="truncate font-mono text-[11px] text-white sm:text-xs">
-                                {address.slice(0, 12)}...{address.slice(-8)}
-                              </p>
-                            </div>
-                            <p className="font-mono text-xs text-[var(--flux-cyan)]">
-                              {output.value.toFixed(8)}
+                    <div className="relative flex-1 overflow-hidden rounded-[24px] border border-white/[0.06] bg-[linear-gradient(145deg,rgba(8,16,36,0.38),rgba(8,16,36,0.12))] px-3 py-3 sm:px-3.5 sm:py-3.5">
+                      <div className="pointer-events-none absolute inset-y-4 left-1/2 hidden w-px bg-gradient-to-b from-transparent via-white/22 to-transparent xl:block" />
+                      <div className="grid h-full gap-3.5 xl:grid-cols-[1.06fr_0.94fr]">
+                        <div className="flex h-full min-h-[324px] flex-col xl:pr-2.5">
+                          <div>
+                            <p className="px-1 text-[9px] uppercase tracking-[0.18em] text-[var(--flux-text-dim)] sm:text-[10px] sm:tracking-[0.2em]">
+                              Output Lanes
                             </p>
-                          </Link>
-                        );
-                      })}
+                            <div className="mt-3.5 grid gap-3.5">
+                              {rewardOutputs.map((output, outputIndex) => {
+                                const rewardLabel = getRewardLabel(output.value, latestReward.height);
+                                const address = output.address ?? "unknown";
+                                return (
+                                  <Link
+                                    key={`${latestReward.height}-${outputIndex}-${address}`}
+                                    href={address === "unknown" ? "/blocks" : `/address/${address}`}
+                                    className="group relative flex items-center justify-between rounded-xl px-2.5 py-3 transition-[transform,color] hover:translate-x-1"
+                                  >
+                                    {outputIndex > 0 ? (
+                                      <span className="pointer-events-none absolute inset-x-1 top-0 h-px bg-white/8" />
+                                    ) : null}
+                                    <div className="min-w-0">
+                                      <p className="truncate text-[10px] uppercase tracking-[0.14em] text-[var(--flux-text-muted)] sm:text-[11px]">
+                                        {rewardLabel.type}
+                                      </p>
+                                      <p className="truncate font-mono text-[11px] text-white sm:text-xs">
+                                        {address.slice(0, 12)}...{address.slice(-8)}
+                                      </p>
+                                    </div>
+                                    <p className="font-mono text-xs text-[var(--flux-cyan)]">
+                                      {output.value.toFixed(8)}
+                                    </p>
+                                  </Link>
+                                );
+                              })}
+                            </div>
+                          </div>
+                          {rewardFeeProfile ? (
+                            <div className="my-auto pt-4">
+                              <div className="rounded-[18px] border border-white/[0.07] bg-[linear-gradient(140deg,rgba(8,16,36,0.42),rgba(8,16,36,0.16))] px-3 py-3.5">
+                                <p className="text-[9px] uppercase tracking-[0.16em] text-[var(--flux-text-dim)]">
+                                  Fee Signal
+                                </p>
+                                <div className="mt-2.5 grid grid-cols-3 gap-2 text-[10px]">
+                                  <div className="rounded-lg border border-white/[0.08] bg-[rgba(7,15,33,0.58)] px-2 py-1.5">
+                                    <p className="text-[8px] uppercase tracking-[0.12em] text-[var(--flux-text-dim)]">
+                                      Base
+                                    </p>
+                                    <p className="mt-1 font-mono text-[11px] text-white">
+                                      {rewardFeeProfile.baseReward.toFixed(4)}
+                                    </p>
+                                  </div>
+                                  <div className="rounded-lg border border-white/[0.08] bg-[rgba(7,15,33,0.58)] px-2 py-1.5">
+                                    <p className="text-[8px] uppercase tracking-[0.12em] text-[var(--flux-text-dim)]">
+                                      Current Fees
+                                    </p>
+                                    <p className="mt-1 font-mono text-[11px] text-white">
+                                      {rewardFeeProfile.currentFee.toFixed(4)}
+                                    </p>
+                                  </div>
+                                  <div className="rounded-lg border border-white/[0.08] bg-[rgba(7,15,33,0.58)] px-2 py-1.5">
+                                    <p className="text-[8px] uppercase tracking-[0.12em] text-[var(--flux-text-dim)]">
+                                      Avg Fees
+                                    </p>
+                                    <p className="mt-1 font-mono text-[11px] text-[var(--flux-cyan)]">
+                                      {rewardFeeProfile.averageFee.toFixed(4)}
+                                    </p>
+                                  </div>
+                                </div>
+                                <div className="mt-2.5 flex h-10 items-end gap-1.5 rounded-lg border border-white/[0.08] bg-[rgba(7,15,33,0.58)] px-2 py-1.5">
+                                  {rewardFeeProfile.points.map((point, index) => (
+                                    <span
+                                      key={`${point.hash}-fee-signal`}
+                                      className="w-[6px] rounded-full bg-[linear-gradient(180deg,rgba(56,232,255,0.95),rgba(168,85,247,0.78))]"
+                                      style={{
+                                        height: `${Math.max(20, Math.round(point.ratio * 100))}%`,
+                                        opacity: index === 0 ? 1 : 0.72,
+                                      }}
+                                    />
+                                  ))}
+                                </div>
+                                <p className="mt-1.5 flex items-center justify-between font-mono text-[9px] text-white/55">
+                                  <span>Peak fee {rewardFeeProfile.maxFee.toFixed(4)}</span>
+                                  <span className="text-[var(--flux-cyan)]">
+                                    Fee share {rewardFeeProfile.feeShare.toFixed(2)}%
+                                  </span>
+                                </p>
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+
+                        <div className="flex h-full min-h-[324px] flex-col gap-3.5 border-t border-white/[0.08] pt-3.5 xl:border-l xl:border-t-0 xl:border-white/[0.08] xl:pl-3.5 xl:pt-0">
+                          {rewardDispatchStats ? (
+                            <div className="grid grid-cols-2 gap-3 rounded-[18px] border border-white/[0.07] bg-[rgba(7,15,33,0.45)] px-3 py-3">
+                              <div>
+                                <p className="text-[9px] uppercase tracking-[0.14em] text-[var(--flux-text-dim)]">
+                                  Outputs
+                                </p>
+                                <p className="mt-1.5 font-mono text-sm text-white">
+                                  {formatInteger(rewardDispatchStats.outputCount)}
+                                </p>
+                              </div>
+                              <div>
+                                <p className="text-[9px] uppercase tracking-[0.14em] text-[var(--flux-text-dim)]">
+                                  Reward Age
+                                </p>
+                                <p className="mt-1.5 font-mono text-sm text-white">
+                                  {rewardDispatchStats.age}
+                                </p>
+                              </div>
+                              <div>
+                                <p className="text-[9px] uppercase tracking-[0.14em] text-[var(--flux-text-dim)]">
+                                  Largest
+                                </p>
+                                <p className="mt-1.5 font-mono text-sm text-[var(--flux-cyan)]">
+                                  {rewardDispatchStats.largest.toFixed(8)}
+                                </p>
+                              </div>
+                              <div>
+                                <p className="text-[9px] uppercase tracking-[0.14em] text-[var(--flux-text-dim)]">
+                                  Smallest
+                                </p>
+                                <p className="mt-1.5 font-mono text-sm text-[var(--flux-cyan)]">
+                                  {rewardDispatchStats.smallest.toFixed(8)}
+                                </p>
+                              </div>
+                              {rewardFeeProfile ? (
+                                <div className="col-span-2 rounded-lg border border-white/[0.08] bg-[rgba(7,15,33,0.5)] px-2.5 py-2">
+                                  <div className="flex items-center justify-between text-[9px] uppercase tracking-[0.12em] text-[var(--flux-text-dim)]">
+                                    <span>Fee Share</span>
+                                    <span className="font-mono text-[var(--flux-cyan)]">
+                                      {rewardFeeProfile.feeShare.toFixed(2)}%
+                                    </span>
+                                  </div>
+                                  <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-white/10">
+                                    <div
+                                      className="h-full rounded-full bg-[linear-gradient(90deg,rgba(56,232,255,0.9),rgba(168,85,247,0.78))]"
+                                      style={{
+                                        width: `${Math.max(3, Math.min(100, rewardFeeProfile.feeShare))}%`,
+                                      }}
+                                    />
+                                  </div>
+                                </div>
+                              ) : null}
+                            </div>
+                          ) : null}
+
+                          {rewardSplit.length > 0 ? (
+                            <div className="flex flex-1 flex-col overflow-hidden rounded-[20px] border border-white/[0.07] bg-[rgba(7,15,33,0.52)] px-3.5 py-4">
+                              <p className="text-[11px] uppercase tracking-[0.14em] text-[var(--flux-text-muted)]">
+                                Reward Split
+                              </p>
+                              <p className="mt-1.5 font-mono text-[10px] text-white/60">
+                                {formatInteger(rewardDispatchStats?.outputCount)} outputs tracked
+                              </p>
+                              <div className="mt-4 space-y-3.5">
+                                {rewardSplit.map((splitRow) => (
+                                  <div key={splitRow.type}>
+                                    <div className="flex items-center justify-between text-[11px]">
+                                      <span className="font-mono uppercase tracking-[0.08em] text-white/80">
+                                        {splitRow.type}
+                                      </span>
+                                      <div className="text-right">
+                                        <p className="font-mono text-sm text-[var(--flux-cyan)]">
+                                          {splitRow.percent.toFixed(1)}%
+                                        </p>
+                                        <p className="font-mono text-[10px] text-white/65">
+                                          {splitRow.value.toFixed(8)}
+                                        </p>
+                                      </div>
+                                    </div>
+                                    <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-white/10">
+                                      <div
+                                        className="h-full rounded-full bg-[linear-gradient(90deg,rgba(56,232,255,0.9),rgba(168,85,247,0.8))]"
+                                        style={{ width: `${Math.min(100, Math.max(6, splitRow.percent))}%` }}
+                                      />
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                              {rewardHistory.length > 0 ? (
+                                <div className="mt-auto pt-4">
+                                  <div className="rounded-[18px] border border-white/[0.07] bg-[rgba(7,15,33,0.62)] px-3 py-3">
+                                    <div className="mb-1.5 flex items-end justify-between">
+                                      <p className="text-[9px] uppercase tracking-[0.12em] text-[var(--flux-text-dim)]">
+                                        Reward Pulse
+                                      </p>
+                                      <p className="font-mono text-[9px] text-white/55">
+                                        last {formatInteger(rewardHistory.length)}
+                                      </p>
+                                    </div>
+                                    <div className="space-y-2">
+                                      {rewardHistory.map((rewardItem) => (
+                                        <div
+                                          key={`${rewardItem.hash}-reward-pulse`}
+                                          className="grid grid-cols-[auto_1fr_auto] items-center gap-2 text-[10px]"
+                                        >
+                                          <span className="h-1.5 w-1.5 rounded-full bg-[var(--flux-cyan)] shadow-[0_0_8px_rgba(56,232,255,0.7)]" />
+                                          <p className="truncate font-mono text-white/80">
+                                            #{rewardItem.height.toLocaleString()}
+                                          </p>
+                                          <p className="font-mono text-[var(--flux-cyan)]">
+                                            {formatTimeAgo(rewardItem.timestamp)} ago
+                                          </p>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                </div>
+                              ) : null}
+                            </div>
+                          ) : (
+                            <div className="flex-1 rounded-lg border border-white/[0.08] bg-[linear-gradient(145deg,rgba(8,16,36,0.24),rgba(8,16,36,0.08))] px-3 py-2 text-xs text-[var(--flux-text-muted)]">
+                              Reward split data is syncing...
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 ) : (
                   <div className="px-2 py-3 text-sm text-[var(--flux-text-muted)]">
