@@ -75,7 +75,9 @@ export function PollingControls({
   }
 
   return (
-    <div className={`flex flex-col gap-3 p-3 sm:p-4 rounded-lg border bg-card ${className}`}>
+    <div
+      className={`flex flex-col gap-3 rounded-2xl border border-white/[0.08] bg-[linear-gradient(135deg,rgba(8,20,42,0.48),rgba(7,14,32,0.24))] p-3 sm:p-4 ${className}`}
+    >
       <div className="flex flex-col sm:flex-row sm:items-center gap-3">
         <div className="flex items-center gap-2">
           <Clock className="h-4 w-4 text-muted-foreground" />
@@ -145,7 +147,7 @@ export function PollingControls({
         </div>
       </div>
 
-      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 text-sm text-muted-foreground border-t pt-2">
+      <div className="flex flex-col items-start gap-2 border-t border-white/[0.1] pt-2 text-sm text-muted-foreground sm:flex-row sm:items-center">
         {polling.isPolling && (
           <span className="flex items-center gap-1.5">
             <span className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />

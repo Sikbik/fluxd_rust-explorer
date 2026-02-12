@@ -115,7 +115,7 @@ export function AddressTransactions({
 
   if (isLoading) {
     return (
-      <Card>
+      <Card className="rounded-2xl border border-white/[0.08] bg-[linear-gradient(140deg,rgba(8,20,42,0.42),rgba(7,15,33,0.2))]">
         <CardHeader>
           <CardTitle>Transactions</CardTitle>
         </CardHeader>
@@ -130,7 +130,7 @@ export function AddressTransactions({
 
   if (!transactions.length) {
     return (
-      <Card>
+      <Card className="rounded-2xl border border-white/[0.08] bg-[linear-gradient(140deg,rgba(8,20,42,0.42),rgba(7,15,33,0.2))]">
         <CardHeader>
           <CardTitle>Transactions</CardTitle>
         </CardHeader>
@@ -142,7 +142,7 @@ export function AddressTransactions({
   }
 
   return (
-    <Card>
+    <Card className="rounded-2xl border border-white/[0.08] bg-[linear-gradient(140deg,rgba(8,20,42,0.44),rgba(7,15,33,0.2))]">
       <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div className="flex-1">
           <CardTitle>Transactions</CardTitle>
@@ -288,7 +288,7 @@ export function AddressTransactions({
                       </TableCell>
                     </TableRow>
                     {isExpanded && (
-                      <TableRow className="bg-muted/40">
+                      <TableRow className="bg-[rgba(8,18,37,0.55)]">
                         <TableCell colSpan={5} className="py-4">
                           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 text-sm">
                             <div>
@@ -391,7 +391,7 @@ export function AddressTransactions({
           </Table>
         </div>
 
-        <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-4 border-t">
+        <div className="flex flex-col items-center justify-between gap-4 border-t border-white/[0.1] pt-4 sm:flex-row">
           {/* Page info and navigation */}
           <div className="flex items-center gap-3">
             <span className="text-sm text-muted-foreground">

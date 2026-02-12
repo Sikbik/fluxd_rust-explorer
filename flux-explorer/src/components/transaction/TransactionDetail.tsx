@@ -55,7 +55,7 @@ export function TransactionDetail({ txid }: TransactionDetailProps) {
 
   if (error) {
     return (
-      <Card className="border-destructive">
+      <Card className="rounded-2xl border border-destructive/60 bg-[linear-gradient(140deg,rgba(55,16,26,0.38),rgba(10,14,30,0.36))]">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-destructive">
             <AlertCircle className="h-5 w-5" />
@@ -73,7 +73,7 @@ export function TransactionDetail({ txid }: TransactionDetailProps) {
 
   if (!transaction) {
     return (
-      <Card>
+      <Card className="rounded-2xl border border-white/[0.08] bg-[linear-gradient(140deg,rgba(8,20,42,0.46),rgba(7,15,33,0.22))]">
         <CardHeader>
           <CardTitle>Transaction Not Found</CardTitle>
         </CardHeader>

@@ -52,7 +52,7 @@ export function TransactionHeader({ transaction }: TransactionHeaderProps) {
           {/* Transaction ID */}
           <div>
             <p className="text-sm font-medium text-muted-foreground mb-1">Transaction ID</p>
-            <div className="flex items-center gap-2 p-3 bg-muted rounded-md">
+            <div className="flex items-center gap-2 rounded-xl border border-white/[0.08] bg-[rgba(8,18,37,0.46)] p-3">
               <span className="font-mono text-xs sm:text-sm break-all flex-1 min-w-0">
                 {transaction.txid}
               </span>
@@ -65,7 +65,7 @@ export function TransactionHeader({ transaction }: TransactionHeaderProps) {
             <div className="grid gap-3 sm:gap-4 grid-cols-1 md:grid-cols-2">
               <div>
                 <p className="text-sm font-medium text-muted-foreground mb-1">Block Hash</p>
-                <div className="flex items-center gap-2 p-3 bg-muted rounded-md overflow-hidden">
+                <div className="flex items-center gap-2 overflow-hidden rounded-xl border border-white/[0.08] bg-[rgba(8,18,37,0.46)] p-3">
                   <a
                     href={`/block/${transaction.blockhash}`}
                     className="font-mono text-xs sm:text-sm text-primary hover:underline truncate flex-1 min-w-0"
@@ -78,7 +78,7 @@ export function TransactionHeader({ transaction }: TransactionHeaderProps) {
               {transaction.blockheight !== undefined && (
                 <div>
                   <p className="text-sm font-medium text-muted-foreground mb-1">Block Height</p>
-                  <div className="flex items-center gap-2 p-3 bg-muted rounded-md">
+                  <div className="flex items-center gap-2 rounded-xl border border-white/[0.08] bg-[rgba(8,18,37,0.46)] p-3">
                     <a
                       href={`/block/${transaction.blockheight}`}
                       className="font-mono text-xs sm:text-sm text-primary hover:underline"

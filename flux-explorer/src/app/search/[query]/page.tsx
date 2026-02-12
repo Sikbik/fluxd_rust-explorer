@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { FluxAPI } from "@/lib/api";
+import { ExplorerPageShell } from "@/components/layout/ExplorerPageShell";
 
 /**
  * Universal search page that intelligently routes to the correct page
@@ -63,13 +64,21 @@ export default function SearchPage() {
   }, [query, router]);
 
   return (
-    <div className="container mx-auto py-8 max-w-[1600px]">
-      <div className="flex items-center justify-center min-h-[400px]">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
-          <p className="text-muted-foreground">Searching...</p>
+    <ExplorerPageShell
+      eyebrow="Resolver"
+      title="Search Routing"
+      description="Detecting whether your query is a block, transaction, or address and redirecting to the correct view."
+      chips={["Unified query engine", "Fast route resolution"]}
+    >
+      <div className="flex min-h-[320px] items-center justify-center">
+        <div className="rounded-2xl border border-white/[0.1] bg-[linear-gradient(140deg,rgba(8,20,42,0.58),rgba(7,15,34,0.2))] px-8 py-10 text-center">
+          <div className="mx-auto mb-4 h-12 w-12 animate-spin rounded-full border-b-2 border-[var(--flux-cyan)]" />
+          <p className="text-[var(--flux-text-secondary)]">Searching...</p>
+          <p className="mt-1 text-xs uppercase tracking-[0.14em] text-[var(--flux-text-dim)]">
+            Query: {query}
+          </p>
         </div>
       </div>
-    </div>
+    </ExplorerPageShell>
   );
 }

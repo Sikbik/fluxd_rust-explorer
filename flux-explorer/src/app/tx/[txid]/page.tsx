@@ -1,6 +1,7 @@
 import { Suspense } from "react";
 import { TransactionDetail } from "@/components/transaction/TransactionDetail";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ExplorerPageShell } from "@/components/layout/ExplorerPageShell";
 
 interface PageProps {
   params: {
@@ -9,12 +10,19 @@ interface PageProps {
 }
 
 export default function TransactionPage({ params }: PageProps) {
+  const txLabel = `${params.txid.slice(0, 14)}...${params.txid.slice(-8)}`;
+
   return (
-    <div className="container py-8 max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8">
+    <ExplorerPageShell
+      eyebrow="Transaction Trace"
+      title={`Transaction ${txLabel}`}
+      description="Analyze signatures, inputs, outputs, fees, and raw wire data for a single transaction."
+      chips={["Forensic transaction view", "Input/output breakdown", "Raw data + structure"]}
+    >
       <Suspense fallback={<TransactionDetailSkeleton />}>
         <TransactionDetail txid={params.txid} />
       </Suspense>
-    </div>
+    </ExplorerPageShell>
   );
 }
 

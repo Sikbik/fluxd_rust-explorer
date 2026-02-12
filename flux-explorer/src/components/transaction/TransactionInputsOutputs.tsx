@@ -25,7 +25,7 @@ export function TransactionInputsOutputs({ transaction }: TransactionInputsOutpu
   const isShielded = hasNoInputs && !isCoinbase && !isFluxNode;
 
   return (
-    <Card>
+    <Card className="rounded-2xl border border-white/[0.08] bg-[linear-gradient(140deg,rgba(8,20,42,0.46),rgba(7,15,33,0.22))]">
       <CardHeader>
         <CardTitle>Inputs & Outputs</CardTitle>
       </CardHeader>
@@ -53,7 +53,9 @@ export function TransactionInputsOutputs({ transaction }: TransactionInputsOutpu
                       Inputs ({inputCount})
                     </h3>
                     {!isCoinbase && (
-                      <Badge variant="outline">{totalInputValue.toFixed(8)} FLUX</Badge>
+                      <Badge variant="outline" className="border-cyan-400/30 bg-cyan-500/10 text-cyan-200">
+                        {totalInputValue.toFixed(8)} FLUX
+                      </Badge>
                     )}
                   </div>
 
@@ -75,8 +77,8 @@ export function TransactionInputsOutputs({ transaction }: TransactionInputsOutpu
 
           {/* ARROW - Hidden on mobile, shown on md+ */}
           <div className="hidden md:flex items-center justify-center py-8">
-            <div className="flex items-center justify-center w-12 h-12 rounded-full bg-primary/10">
-              <ArrowRight className="h-6 w-6 text-primary" />
+            <div className="flex items-center justify-center w-12 h-12 rounded-full border border-white/[0.12] bg-[radial-gradient(circle,rgba(56,232,255,0.18),rgba(7,16,36,0.84)_68%)]">
+              <ArrowRight className="h-6 w-6 text-cyan-200" />
             </div>
           </div>
 
@@ -98,7 +100,7 @@ export function TransactionInputsOutputs({ transaction }: TransactionInputsOutpu
                     <h3 className="text-lg font-semibold">
                       Outputs ({outputCount})
                     </h3>
-                    <Badge variant="outline">
+                    <Badge variant="outline" className="border-cyan-400/30 bg-cyan-500/10 text-cyan-200">
                       {(transaction.valueOut + (hasShieldedOutput ? shieldedOutputAmount : 0)).toFixed(8)} FLUX
                     </Badge>
                   </div>
@@ -128,17 +130,17 @@ export function TransactionInputsOutputs({ transaction }: TransactionInputsOutpu
 
 function CoinbaseInput() {
   return (
-    <div className="p-4 rounded-lg border bg-card hover:bg-muted/50 transition-colors border-primary/20">
+    <div className="p-4 rounded-xl border border-cyan-400/30 bg-[linear-gradient(140deg,rgba(8,23,43,0.62),rgba(9,20,40,0.32))] transition-colors hover:border-cyan-300/50 hover:bg-[linear-gradient(140deg,rgba(10,28,53,0.68),rgba(10,21,41,0.4))]">
       <div className="flex items-center gap-3 mb-3">
-        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10">
-          <Coins className="h-5 w-5 text-primary" />
+        <div className="flex h-10 w-10 items-center justify-center rounded-full border border-cyan-300/35 bg-cyan-500/10">
+          <Coins className="h-5 w-5 text-cyan-200" />
         </div>
         <div className="flex-1">
           <div className="font-semibold text-base">Coinbase</div>
           <p className="text-xs text-muted-foreground">Newly Generated Coins</p>
         </div>
       </div>
-      <div className="pt-3 border-t border-border/50">
+      <div className="pt-3 border-t border-white/[0.12]">
         <p className="text-sm text-muted-foreground leading-relaxed">
           This is a coinbase transaction that generates new coins as a block reward for mining.
         </p>
@@ -153,7 +155,7 @@ interface ShieldedInputProps {
 
 function ShieldedInput({ amount }: ShieldedInputProps) {
   return (
-    <div className="p-4 rounded-lg border bg-card hover:bg-muted/50 transition-colors border-purple-500/20">
+    <div className="p-4 rounded-xl border border-purple-400/30 bg-[linear-gradient(140deg,rgba(34,16,56,0.44),rgba(11,18,38,0.34))] transition-colors hover:border-purple-300/50">
       <div className="space-y-2">
         {/* Index and Value */}
         <div className="flex items-center justify-between">
@@ -171,8 +173,8 @@ function ShieldedInput({ amount }: ShieldedInputProps) {
 
         {/* Shielded Pool Info */}
         <div className="flex items-center gap-3 pt-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-purple-500/10">
-            <Lock className="h-4 w-4 text-purple-500" />
+          <div className="flex h-8 w-8 items-center justify-center rounded-full border border-purple-400/35 bg-purple-500/12">
+            <Lock className="h-4 w-4 text-purple-300" />
           </div>
           <div className="flex-1">
             <div className="font-medium text-sm">From Shielded Pool</div>
@@ -193,7 +195,7 @@ interface ShieldedOutputProps {
 
 function ShieldedOutput({ amount, index }: ShieldedOutputProps) {
   return (
-    <div className="p-4 rounded-lg border bg-card hover:bg-muted/50 transition-colors border-purple-500/20">
+    <div className="p-4 rounded-xl border border-purple-400/30 bg-[linear-gradient(140deg,rgba(34,16,56,0.44),rgba(11,18,38,0.34))] transition-colors hover:border-purple-300/50">
       <div className="space-y-2">
         {/* Index and Value */}
         <div className="flex items-center justify-between">
@@ -211,8 +213,8 @@ function ShieldedOutput({ amount, index }: ShieldedOutputProps) {
 
         {/* Shielded Pool Info */}
         <div className="flex items-center gap-3 pt-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-purple-500/10">
-            <Lock className="h-4 w-4 text-purple-500" />
+          <div className="flex h-8 w-8 items-center justify-center rounded-full border border-purple-400/35 bg-purple-500/12">
+            <Lock className="h-4 w-4 text-purple-300" />
           </div>
           <div className="flex-1">
             <div className="font-medium text-sm">To Shielded Pool</div>
@@ -242,7 +244,7 @@ function FluxNodeInput({ transaction }: FluxNodeInputProps) {
   const tierColor = tier && tierColorMap[tier] ? tierColorMap[tier] : "text-blue-500 border-blue-500/20 bg-blue-500/10";
 
   return (
-    <div className={`p-4 rounded-lg border bg-card hover:bg-muted/50 transition-colors ${tierColor.replace('text-', 'border-').split(' ')[1]}`}>
+    <div className={`p-4 rounded-xl border bg-[linear-gradient(140deg,rgba(8,20,42,0.58),rgba(9,20,40,0.3))] transition-colors hover:bg-[linear-gradient(140deg,rgba(10,27,52,0.65),rgba(10,21,41,0.4))] ${tierColor.replace('text-', 'border-').split(' ')[1]}`}>
       <div className="flex items-center gap-3 mb-3">
         <div className={`flex h-10 w-10 items-center justify-center rounded-full ${tierColor.split(' ')[2]}`}>
           <CheckCircle className={`h-5 w-5 ${tierColor.split(' ')[0]}`} />
@@ -257,7 +259,7 @@ function FluxNodeInput({ transaction }: FluxNodeInputProps) {
           </Badge>
         )}
       </div>
-      <div className="pt-3 border-t border-border/50 space-y-2">
+      <div className="pt-3 border-t border-white/[0.12] space-y-2">
         <p className="text-sm text-muted-foreground leading-relaxed">
           This is a FluxNode {typeLabel.toLowerCase()} transaction. FluxNodes are special transactions that register or confirm node status on the blockchain.
         </p>
@@ -294,7 +296,7 @@ interface InputCardProps {
 
 function InputCard({ input, index }: InputCardProps) {
   return (
-    <div className="p-4 rounded-lg border bg-card hover:bg-muted/50 transition-colors">
+    <div className="p-4 rounded-xl border border-white/[0.1] bg-[linear-gradient(140deg,rgba(8,20,42,0.58),rgba(9,20,40,0.3))] transition-colors hover:border-cyan-300/40 hover:bg-[linear-gradient(140deg,rgba(10,27,52,0.65),rgba(10,21,41,0.4))]">
       <div className="space-y-2">
         {/* Index and Value */}
         <div className="flex items-center justify-between">
@@ -386,7 +388,7 @@ function OutputCard({ output, index, isCoinbase = false, blockHeight }: OutputCa
   const tierInfo = getTierInfo(amount);
 
   return (
-    <div className="p-4 rounded-lg border bg-card hover:bg-muted/50 transition-colors">
+    <div className="p-4 rounded-xl border border-white/[0.1] bg-[linear-gradient(140deg,rgba(8,20,42,0.58),rgba(9,20,40,0.3))] transition-colors hover:border-cyan-300/40 hover:bg-[linear-gradient(140deg,rgba(10,27,52,0.65),rgba(10,21,41,0.4))]">
       <div className="space-y-2">
         {/* Index, Value, and Status */}
         <div className="flex items-center justify-between">

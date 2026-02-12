@@ -89,10 +89,10 @@ export function BlockStats({ block }: BlockStatsProps) {
 
   return (
     <div className="space-y-4">
-      <h2 className="text-2xl font-bold">Block Statistics</h2>
+      <h2 className="text-xl font-bold uppercase tracking-[0.08em] text-[var(--flux-text-primary)] sm:text-2xl">Block Statistics</h2>
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         {stats.map((stat) => (
-          <Card key={stat.label} className="relative overflow-hidden select-text">
+          <Card key={stat.label} className="relative overflow-hidden rounded-2xl border border-white/[0.08] bg-[linear-gradient(140deg,rgba(8,20,42,0.42),rgba(7,15,33,0.2))] select-text">
             <div
               className={`absolute inset-0 bg-gradient-to-br ${stat.gradient} opacity-[0.03] pointer-events-none`}
             />
@@ -120,7 +120,7 @@ export function BlockStats({ block }: BlockStatsProps) {
 
       {/* FluxNode Miner Information */}
       {(block.miner || block.nodeTier) && (
-        <Card>
+        <Card className="rounded-2xl border border-white/[0.08] bg-[linear-gradient(140deg,rgba(8,20,42,0.42),rgba(7,15,33,0.2))]">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Server className="h-5 w-5" />
@@ -150,7 +150,7 @@ export function BlockStats({ block }: BlockStatsProps) {
               {block.miner && (
                 <div className="space-y-1">
                   <div className="text-sm text-muted-foreground">Wallet Address</div>
-                  <div className="flex items-center gap-2 rounded-lg bg-muted/50 p-2">
+                  <div className="flex items-center gap-2 rounded-xl border border-white/[0.1] bg-[rgba(8,18,37,0.5)] p-2">
                     <a
                       href={`/address/${block.miner}`}
                       className="font-mono text-sm font-medium text-primary hover:underline flex-1 truncate"

@@ -97,7 +97,7 @@ export function AddressOverview({ addressInfo }: AddressOverviewProps) {
           <CardContent>
             <div className="space-y-4">
               {/* Total Nodes Summary */}
-              <div className="p-4 rounded-lg bg-gradient-to-r from-orange-500/10 to-red-500/10 border border-orange-500/20">
+              <div className="rounded-xl border border-orange-500/24 bg-gradient-to-r from-orange-500/14 to-red-500/12 p-4">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <Server className="h-5 w-5 text-orange-500" />
@@ -110,7 +110,7 @@ export function AddressOverview({ addressInfo }: AddressOverviewProps) {
               {/* Node Tier Breakdown */}
               <div className="grid gap-4 md:grid-cols-3">
                 {cumulusCount > 0 && (
-                  <div className="p-4 rounded-lg border border-pink-500/30 bg-pink-500/5">
+                  <div className="rounded-xl border border-pink-500/30 bg-pink-500/8 p-4">
                     <div className="flex items-center gap-2 mb-2">
                       <div className="w-3 h-3 rounded-full bg-pink-500"></div>
                       <span className="text-sm font-medium text-pink-500">CUMULUS</span>
@@ -120,7 +120,7 @@ export function AddressOverview({ addressInfo }: AddressOverviewProps) {
                 )}
 
                 {nimbusCount > 0 && (
-                  <div className="p-4 rounded-lg border border-purple-500/30 bg-purple-500/5">
+                  <div className="rounded-xl border border-purple-500/30 bg-purple-500/8 p-4">
                     <div className="flex items-center gap-2 mb-2">
                       <div className="w-3 h-3 rounded-full bg-purple-500"></div>
                       <span className="text-sm font-medium text-purple-500">NIMBUS</span>
@@ -130,7 +130,7 @@ export function AddressOverview({ addressInfo }: AddressOverviewProps) {
                 )}
 
                 {stratusCount > 0 && (
-                  <div className="p-4 rounded-lg border border-blue-500/30 bg-blue-500/5">
+                  <div className="rounded-xl border border-blue-500/30 bg-blue-500/8 p-4">
                     <div className="flex items-center gap-2 mb-2">
                       <div className="w-3 h-3 rounded-full bg-blue-500"></div>
                       <span className="text-sm font-medium text-blue-500">STRATUS</span>
@@ -208,7 +208,7 @@ export function AddressOverview({ addressInfo }: AddressOverviewProps) {
             </div>
 
             {/* Net Flow */}
-            <div className="p-4 rounded-lg bg-muted/50">
+            <div className="rounded-xl border border-white/[0.08] bg-[rgba(8,18,37,0.46)] p-4">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Package className="h-4 w-4 text-muted-foreground" />
@@ -253,8 +253,10 @@ interface StatCardProps {
 function StatCard({ icon, label, value, description, highlighted }: StatCardProps) {
   return (
     <div
-      className={`flex gap-3 p-4 rounded-lg border ${
-        highlighted ? "bg-primary/5 border-primary/20" : "bg-card"
+      className={`flex gap-3 rounded-xl border p-4 ${
+        highlighted
+          ? "border-[var(--flux-border-hover)] bg-[linear-gradient(135deg,rgba(56,232,255,0.12),rgba(56,232,255,0.04))]"
+          : "border-white/[0.08] bg-[linear-gradient(140deg,rgba(8,20,42,0.44),rgba(7,15,33,0.2))]"
       }`}
     >
       <div className="flex-shrink-0 mt-1">{icon}</div>

@@ -149,7 +149,7 @@ interface StatCardProps {
 
 function StatCard({ icon, label, value, description }: StatCardProps) {
   return (
-    <div className="flex gap-3 p-4 rounded-lg border bg-card">
+    <div className="flex gap-3 rounded-xl border border-white/[0.08] bg-[linear-gradient(140deg,rgba(8,20,42,0.44),rgba(7,15,33,0.2))] p-4">
       <div className="flex-shrink-0 mt-1 text-muted-foreground">{icon}</div>
       <div className="flex-1 min-w-0">
         <p className="text-sm font-medium text-muted-foreground">{label}</p>

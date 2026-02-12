@@ -1,6 +1,7 @@
 import { Suspense } from "react";
 import { BlockDetail } from "@/components/block/BlockDetail";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ExplorerPageShell } from "@/components/layout/ExplorerPageShell";
 
 interface PageProps {
   params: {
@@ -9,12 +10,22 @@ interface PageProps {
 }
 
 export default function BlockPage({ params }: PageProps) {
+  const isHeightQuery = /^[0-9]+$/.test(params.hash);
+  const blockLabel = isHeightQuery
+    ? `#${Number(params.hash).toLocaleString()}`
+    : `${params.hash.slice(0, 14)}...${params.hash.slice(-8)}`;
+
   return (
-    <div className="container py-8 max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8">
+    <ExplorerPageShell
+      eyebrow="Block Inspector"
+      title={`Block ${blockLabel}`}
+      description="Deep inspection of block composition, transactions, and confirmation telemetry."
+      chips={["Detailed block decode", "FluxNode messages", "Raw chain evidence"]}
+    >
       <Suspense fallback={<BlockDetailSkeleton />}>
         <BlockDetail hashOrHeight={params.hash} />
       </Suspense>
-    </div>
+    </ExplorerPageShell>
   );
 }
 

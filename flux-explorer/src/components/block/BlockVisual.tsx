@@ -26,7 +26,7 @@ export function BlockVisual({ block }: BlockVisualProps) {
   const avgTxSize = block.size / txCountForAverage;
 
   return (
-    <Card className="overflow-visible">
+    <Card className="overflow-visible rounded-2xl border border-white/[0.08] bg-[linear-gradient(140deg,rgba(8,20,42,0.46),rgba(7,15,33,0.22))]">
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <Info className="h-5 w-5" />
@@ -41,7 +41,7 @@ export function BlockVisual({ block }: BlockVisualProps) {
               {blockFullness.toFixed(2)}% of 2MB
             </span>
           </div>
-          <Progress value={blockFullness} className="h-2" />
+          <Progress value={blockFullness} className="h-2 border border-white/[0.08] bg-[rgba(8,18,37,0.45)]" />
         </div>
 
         <div className="space-y-2">
@@ -119,9 +119,9 @@ export function BlockVisual({ block }: BlockVisualProps) {
                       key={detail.txid}
                       className={`relative group h-3 w-3 rounded-sm ${bgColor} cursor-help transition-transform hover:scale-125 flex-shrink-0 ${shouldAddGap ? "ml-4" : ""}`}
                     >
-                      <div className={`absolute bottom-full mb-2 px-2 py-1 bg-popover text-popover-foreground text-xs rounded border shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 whitespace-nowrap z-50 pointer-events-none ${isLeftEdge ? "left-0" : "left-1/2 -translate-x-1/2"}`}>
+                      <div className={`absolute bottom-full mb-2 whitespace-nowrap rounded-lg border border-white/[0.14] bg-[linear-gradient(140deg,rgba(7,18,39,0.96),rgba(8,16,35,0.96))] px-2 py-1 text-xs text-[var(--flux-text-secondary)] shadow-lg opacity-0 invisible transition-all duration-200 group-hover:opacity-100 group-hover:visible z-50 pointer-events-none ${isLeftEdge ? "left-0" : "left-1/2 -translate-x-1/2"}`}>
                         {tooltip}
-                        <div className={`absolute top-full -mt-1 border-4 border-transparent border-t-popover ${isLeftEdge ? "left-1" : "left-1/2 -translate-x-1/2"}`}></div>
+                        <div className={`absolute top-full -mt-1 border-4 border-transparent border-t-[rgba(7,18,39,0.96)] ${isLeftEdge ? "left-1" : "left-1/2 -translate-x-1/2"}`}></div>
                       </div>
                     </div>
                   );
@@ -188,7 +188,7 @@ export function BlockVisual({ block }: BlockVisualProps) {
             </span>
           </div>
           <div className="flex items-center gap-2">
-            <div className="flex-1 h-8 rounded-md bg-gradient-to-r from-purple-500/20 to-pink-500/20 border border-purple-500/20 flex items-center justify-center">
+            <div className="flex h-8 flex-1 items-center justify-center rounded-md border border-cyan-400/20 bg-[linear-gradient(90deg,rgba(56,232,255,0.16),rgba(168,85,247,0.18))]">
               <span className="text-xs font-medium">
                 {avgTxSize.toFixed(0)} bytes
               </span>

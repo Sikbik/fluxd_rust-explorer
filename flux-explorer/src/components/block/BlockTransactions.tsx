@@ -110,7 +110,7 @@ export function BlockTransactions({ block }: BlockTransactionsProps) {
   };
 
   return (
-    <Card className="w-full max-w-full">
+    <Card className="w-full max-w-full rounded-2xl border border-white/[0.08] bg-[linear-gradient(140deg,rgba(8,20,42,0.44),rgba(7,15,33,0.2))]">
       <CardHeader>
         <div className="flex items-center justify-between">
           <CardTitle className="flex items-center gap-2">
@@ -123,7 +123,7 @@ export function BlockTransactions({ block }: BlockTransactionsProps) {
                   <Server className="h-3 w-3" />
                   {counts.nodeConfirmations.toLocaleString()}
                 </Badge>
-                <div className="absolute left-0 bottom-full mb-2 p-3 bg-card border rounded-md shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 min-w-[220px]">
+                <div className="absolute bottom-full left-0 z-50 mb-2 min-w-[220px] rounded-xl border border-white/[0.12] bg-[linear-gradient(140deg,rgba(7,18,39,0.94),rgba(8,16,35,0.94))] p-3 shadow-xl opacity-0 invisible transition-all duration-200 group-hover:opacity-100 group-hover:visible">
                   <div className="space-y-2 text-sm">
                     <p className="font-semibold mb-2">Node Confirmations</p>
                     {Object.entries(counts.tierCounts).map(([tier, value]) => (
@@ -135,7 +135,7 @@ export function BlockTransactions({ block }: BlockTransactionsProps) {
                       )
                     ))}
                   </div>
-                  <div className="absolute left-4 bottom-[-6px] w-3 h-3 bg-card border-r border-b rotate-45"></div>
+                  <div className="absolute bottom-[-6px] left-4 h-3 w-3 rotate-45 border-r border-b border-white/[0.12] bg-[rgba(7,18,39,0.94)]"></div>
                 </div>
               </div>
             )}
@@ -249,7 +249,7 @@ export function BlockTransactions({ block }: BlockTransactionsProps) {
             };
 
             return (
-              <div key={detail.txid} className="flex items-center gap-3 rounded-lg border bg-card p-3">
+              <div key={detail.txid} className="flex items-center gap-3 rounded-xl border border-white/[0.08] bg-[rgba(8,18,37,0.46)] p-3">
                 <div className="flex h-8 w-8 items-center justify-center rounded-full bg-muted text-sm font-medium">
                   {globalIndex + 1}
                 </div>

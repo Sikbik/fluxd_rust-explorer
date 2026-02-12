@@ -34,7 +34,7 @@ export function BlocksList() {
 
   if (error) {
     return (
-      <Card>
+      <Card className="rounded-2xl border border-red-500/30 bg-[linear-gradient(140deg,rgba(56,18,25,0.5),rgba(24,10,16,0.3))]">
         <CardContent className="p-8 text-center">
           <p className="text-destructive">Failed to load blocks</p>
           <p className="text-sm text-muted-foreground mt-2">{error.message}</p>
@@ -47,7 +47,7 @@ export function BlocksList() {
     return (
       <div className="space-y-4">
         {[...Array(BLOCKS_PER_PAGE)].map((_, i) => (
-          <Card key={i}>
+          <Card key={i} className="rounded-2xl border border-white/[0.08] bg-[linear-gradient(140deg,rgba(8,20,42,0.42),rgba(7,15,33,0.2))]">
             <CardContent className="p-6">
               <div className="animate-pulse space-y-3">
                 <div className="h-6 bg-muted rounded w-1/4"></div>
@@ -94,7 +94,7 @@ export function BlocksList() {
 
           return (
             <Link href={`/block/${block.height}`} key={block.hash}>
-              <Card className="hover:bg-accent/50 transition-colors cursor-pointer">
+              <Card className="group cursor-pointer overflow-hidden rounded-2xl border border-white/[0.08] bg-[linear-gradient(135deg,rgba(8,20,42,0.5),rgba(7,15,33,0.24))] transition-all duration-300 hover:-translate-y-0.5 hover:border-[var(--flux-border-hover)] hover:shadow-[0_0_24px_rgba(56,232,255,0.16)]">
                 <CardContent className="p-6">
                   <div className="space-y-4">
                     {/* Header Row */}
@@ -128,7 +128,7 @@ export function BlocksList() {
                                 {nodeCount}
                               </Badge>
                               {/* Hover tooltip */}
-                              <div className="absolute right-0 bottom-full mb-2 p-3 bg-card border rounded-md shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 min-w-[220px]">
+                              <div className="absolute right-0 bottom-full z-50 mb-2 min-w-[220px] rounded-xl border border-white/[0.12] bg-[linear-gradient(140deg,rgba(7,18,39,0.92),rgba(8,16,35,0.92))] p-3 shadow-xl opacity-0 invisible transition-all duration-200 group-hover:opacity-100 group-hover:visible">
                                 <div className="space-y-2 text-sm">
                                   <p className="font-semibold mb-2">Node Confirmations</p>
                                   {tierCounts.cumulus > 0 && (
@@ -188,7 +188,7 @@ export function BlocksList() {
                                   )}
                                 </div>
                                 {/* Arrow pointing down */}
-                                <div className="absolute right-4 bottom-[-6px] w-3 h-3 bg-card border-r border-b rotate-45"></div>
+                                <div className="absolute right-4 bottom-[-6px] h-3 w-3 rotate-45 border-r border-b border-white/[0.12] bg-[rgba(7,18,39,0.92)]"></div>
                               </div>
                             </div>
                           )}
@@ -201,7 +201,7 @@ export function BlocksList() {
                     </div>
 
                     {/* Block Hash */}
-                    <div className="flex items-center gap-2 p-3 rounded-lg bg-muted/50">
+                    <div className="flex items-center gap-2 rounded-xl border border-white/[0.08] bg-[rgba(8,18,37,0.42)] p-3">
                       <span className="text-xs text-muted-foreground font-medium">Hash:</span>
                       <span className="font-mono text-sm flex-1 truncate">{block.hash}</span>
                       <CopyButton text={block.hash} />
@@ -263,7 +263,7 @@ export function BlocksList() {
       )}
 
       {/* Info Card */}
-      <Card className="bg-muted/50 border-primary/10">
+      <Card className="rounded-2xl border border-white/[0.08] bg-[linear-gradient(130deg,rgba(8,24,46,0.52),rgba(7,15,33,0.24))]">
         <CardContent className="p-4">
           <div className="flex items-start gap-3">
             <Coins className="h-5 w-5 text-primary mt-0.5" />

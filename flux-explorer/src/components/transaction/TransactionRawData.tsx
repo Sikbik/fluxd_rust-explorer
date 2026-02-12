@@ -57,7 +57,7 @@ export function TransactionRawData({ txid, transaction }: TransactionRawDataProp
   const displayWeight = (transaction.vsize ?? transaction.size) * 4;
 
   return (
-    <Card>
+    <Card className="rounded-2xl border border-white/[0.08] bg-[linear-gradient(140deg,rgba(8,20,42,0.46),rgba(7,15,33,0.22))]">
       <CardHeader>
         <div className="flex items-center justify-between">
           <CardTitle className="flex items-center gap-2">
@@ -69,7 +69,7 @@ export function TransactionRawData({ txid, transaction }: TransactionRawDataProp
               variant="outline"
               size="sm"
               onClick={handleDownloadJson}
-              className="gap-2"
+              className="gap-2 border-white/[0.16] bg-[rgba(10,21,42,0.56)] hover:border-cyan-300/45"
             >
               <Download className="h-4 w-4" />
               Download JSON
@@ -79,7 +79,7 @@ export function TransactionRawData({ txid, transaction }: TransactionRawDataProp
                 variant="outline"
                 size="sm"
                 onClick={handleDownloadHex}
-                className="gap-2"
+                className="gap-2 border-white/[0.16] bg-[rgba(10,21,42,0.56)] hover:border-cyan-300/45"
               >
                 <Download className="h-4 w-4" />
                 Download Hex
@@ -90,7 +90,7 @@ export function TransactionRawData({ txid, transaction }: TransactionRawDataProp
       </CardHeader>
       <CardContent>
         <Tabs value={activeTab} onValueChange={handleTabChange}>
-          <TabsList className="grid w-full grid-cols-2">
+          <TabsList className="grid w-full grid-cols-2 border border-white/[0.12] bg-[rgba(7,16,36,0.56)]">
             <TabsTrigger value="json" className="gap-2">
               <FileJson className="h-4 w-4" />
               JSON
@@ -106,7 +106,7 @@ export function TransactionRawData({ txid, transaction }: TransactionRawDataProp
               <div className="absolute top-2 right-2 z-10">
                 <CopyButton text={JSON.stringify(transaction, null, 2)} />
               </div>
-              <pre className="p-4 rounded-lg bg-muted overflow-x-auto text-xs">
+              <pre className="overflow-x-auto rounded-xl border border-white/[0.1] bg-[linear-gradient(140deg,rgba(8,20,42,0.68),rgba(8,17,36,0.38))] p-4 text-xs">
                 <code className="text-foreground">
                   {JSON.stringify(transaction, null, 2)}
                 </code>
@@ -120,14 +120,14 @@ export function TransactionRawData({ txid, transaction }: TransactionRawDataProp
                 <div className="absolute top-2 right-2 z-10">
                   <CopyButton text={rawData.rawtx} />
                 </div>
-                <pre className="p-4 rounded-lg bg-muted overflow-x-auto text-xs">
+                <pre className="overflow-x-auto rounded-xl border border-white/[0.1] bg-[linear-gradient(140deg,rgba(8,20,42,0.68),rgba(8,17,36,0.38))] p-4 text-xs">
                   <code className="text-foreground break-all">
                     {rawData.rawtx}
                   </code>
                 </pre>
               </div>
             ) : (
-              <div className="p-8 text-center text-muted-foreground">
+              <div className="rounded-xl border border-white/[0.1] bg-[rgba(8,18,37,0.52)] p-8 text-center text-muted-foreground">
                 <Code className="h-12 w-12 mx-auto mb-3 opacity-50" />
                 <p>{isLoadingHex ? "Loading raw transaction data..." : "Click to load raw hex data"}</p>
               </div>
@@ -136,7 +136,7 @@ export function TransactionRawData({ txid, transaction }: TransactionRawDataProp
         </Tabs>
 
         {/* Transaction Structure Information */}
-        <div className="mt-6 p-4 rounded-lg bg-muted/50 text-sm space-y-2">
+        <div className="mt-6 rounded-xl border border-white/[0.1] bg-[linear-gradient(140deg,rgba(8,20,42,0.52),rgba(7,15,33,0.24))] p-4 text-sm space-y-2">
           <h4 className="font-semibold mb-2">Transaction Structure</h4>
           <div className="grid grid-cols-2 gap-2 text-xs">
             <div>

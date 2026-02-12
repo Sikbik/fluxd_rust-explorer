@@ -320,8 +320,8 @@ export function RichListTable() {
       />
 
       {/* Metadata Info */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <div className="border rounded-lg p-4 bg-card">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <div className="rounded-2xl border border-white/[0.08] bg-[linear-gradient(135deg,rgba(8,20,42,0.5),rgba(7,14,32,0.2))] p-4">
           <div className="flex items-center gap-2 text-sm text-muted-foreground mb-1">
             <TrendingUp className="h-4 w-4" />
             <span>Total Addresses</span>
@@ -331,7 +331,7 @@ export function RichListTable() {
           </p>
         </div>
 
-        <div className="border rounded-lg p-4 bg-card">
+        <div className="rounded-2xl border border-white/[0.08] bg-[linear-gradient(135deg,rgba(8,20,42,0.5),rgba(7,14,32,0.2))] p-4">
           <div className="text-sm text-muted-foreground mb-1">
             Circulating Supply
           </div>
@@ -346,7 +346,7 @@ export function RichListTable() {
           </p>
         </div>
 
-        <div className="border rounded-lg p-4 bg-card">
+        <div className="rounded-2xl border border-white/[0.08] bg-[linear-gradient(135deg,rgba(8,20,42,0.5),rgba(7,14,32,0.2))] p-4">
           <div className="text-sm text-muted-foreground mb-1">
             Last Updated
           </div>
@@ -360,11 +360,11 @@ export function RichListTable() {
       </div>
 
       {/* Table */}
-      <div className="border rounded-lg overflow-hidden">
+      <div className="overflow-hidden rounded-2xl border border-white/[0.08] bg-[linear-gradient(135deg,rgba(8,20,42,0.44),rgba(7,14,32,0.2))]">
         <div className="overflow-x-auto overflow-y-visible">
           <Table>
               <TableHeader>
-                <TableRow className="bg-muted/50">
+                <TableRow className="bg-[rgba(8,18,37,0.62)]">
                   <TableHead className="w-[80px] text-center">Rank</TableHead>
                   <TableHead>Address</TableHead>
                   <TableHead className="text-right">Balance (FLUX)</TableHead>
@@ -380,7 +380,7 @@ export function RichListTable() {
                   const hasFluxNodes = totalNodes > 0;
 
                   return (
-                    <TableRow key={address.address} className="hover:bg-muted/30">
+                    <TableRow key={address.address} className="hover:bg-[rgba(56,232,255,0.09)]">
                       <TableCell className="text-center font-medium">
                         #{address.rank}
                       </TableCell>
@@ -405,7 +405,7 @@ export function RichListTable() {
                                 <span className="text-xs font-semibold">{totalNodes}</span>
                               </Badge>
                               {/* Hover tooltip */}
-                              <div className="absolute left-0 bottom-full mb-2 p-3 bg-card border rounded-md shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 min-w-[160px]">
+                              <div className="absolute bottom-full left-0 z-50 mb-2 min-w-[160px] rounded-xl border border-white/[0.12] bg-[linear-gradient(140deg,rgba(7,18,39,0.94),rgba(8,16,35,0.94))] p-3 shadow-xl opacity-0 invisible transition-all duration-200 group-hover:opacity-100 group-hover:visible">
                                 <div className="space-y-1.5">
                                   <div className="font-semibold text-xs text-muted-foreground mb-1.5 border-b border-border pb-1">
                                     FluxNodes
@@ -439,7 +439,7 @@ export function RichListTable() {
                                   )}
                                 </div>
                                 {/* Arrow pointing down */}
-                                <div className="absolute left-4 bottom-[-6px] w-3 h-3 bg-card border-r border-b rotate-45"></div>
+                                <div className="absolute bottom-[-6px] left-4 h-3 w-3 rotate-45 border-r border-b border-white/[0.12] bg-[rgba(7,18,39,0.94)]"></div>
                               </div>
                             </div>
                           )}
@@ -492,7 +492,7 @@ export function RichListTable() {
         </div>
 
       {/* Pagination */}
-      <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+      <div className="flex flex-col items-center justify-between gap-4 rounded-2xl border border-white/[0.08] bg-[linear-gradient(140deg,rgba(8,18,37,0.52),rgba(7,14,32,0.2))] px-3 py-3 sm:flex-row sm:px-4">
         <p className="text-sm text-muted-foreground">
           Showing {((currentPage - 1) * ROWS_PER_PAGE + 1).toLocaleString()} -{" "}
           {Math.min(currentPage * ROWS_PER_PAGE, displayAddresses.length).toLocaleString()}{" "}
@@ -526,8 +526,8 @@ export function RichListTable() {
 
       {/* Loading overlay for page changes */}
       {loading && metadata && (
-        <div className="fixed inset-0 bg-background/50 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="flex flex-col items-center gap-4 bg-card p-6 rounded-lg border shadow-lg">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/50 backdrop-blur-sm">
+          <div className="flex flex-col items-center gap-4 rounded-2xl border border-white/[0.12] bg-[linear-gradient(140deg,rgba(7,18,39,0.92),rgba(8,16,35,0.88))] p-6 shadow-lg">
             <Loader2 className="h-8 w-8 animate-spin text-primary" />
             <p className="text-sm text-muted-foreground">Refreshing rich list...</p>
           </div>
@@ -716,7 +716,7 @@ function RichListDistribution({
 
   return (
     <div className="grid gap-6 lg:grid-cols-3">
-      <div className="border rounded-lg p-6 bg-card space-y-4 lg:col-span-2">
+      <div className="space-y-4 rounded-2xl border border-white/[0.08] bg-[linear-gradient(135deg,rgba(8,20,42,0.5),rgba(7,14,32,0.2))] p-6 lg:col-span-2">
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-lg font-semibold">Rich List Supply Breakdown</h2>
@@ -773,7 +773,7 @@ function RichListDistribution({
         </div>
       </div>
 
-      <div className="border rounded-lg p-6 bg-card space-y-4">
+      <div className="space-y-4 rounded-2xl border border-white/[0.08] bg-[linear-gradient(135deg,rgba(8,20,42,0.5),rgba(7,14,32,0.2))] p-6">
         <div>
           <h2 className="text-lg font-semibold">Top Holdings</h2>
           <p className="text-xs text-muted-foreground">
@@ -783,7 +783,7 @@ function RichListDistribution({
 
         <div className="space-y-3">
           {circulatingSupply !== undefined && (
-            <div className="p-3 rounded-lg bg-muted/50 border">
+            <div className="rounded-xl border border-white/[0.08] bg-[rgba(8,18,37,0.46)] p-3">
               <div className="text-xs uppercase text-muted-foreground">
                 Circulating Supply
               </div>
@@ -800,7 +800,7 @@ function RichListDistribution({
             </div>
           )}
 
-          <div className="p-3 rounded-lg bg-muted/50 border">
+          <div className="rounded-xl border border-white/[0.08] bg-[rgba(8,18,37,0.46)] p-3">
             <div className="text-xs uppercase text-muted-foreground">
               Total Supply
             </div>
@@ -818,7 +818,7 @@ function RichListDistribution({
 
           {/* Transparent vs Shielded Breakdown */}
           {transparentSupply !== undefined && shieldedPool !== undefined && (
-            <div className="p-3 rounded-lg bg-muted/50 border space-y-2">
+            <div className="space-y-2 rounded-xl border border-white/[0.08] bg-[rgba(8,18,37,0.46)] p-3">
               <div className="text-xs uppercase text-muted-foreground">
                 Total Supply Breakdown
               </div>
@@ -850,7 +850,7 @@ function RichListDistribution({
             </div>
           )}
 
-          <div className="p-3 rounded-lg bg-muted/50 border space-y-2">
+          <div className="space-y-2 rounded-xl border border-white/[0.08] bg-[rgba(8,18,37,0.46)] p-3">
             <div className="flex items-center justify-between text-sm">
               <span>Top 10 Addresses</span>
               <span className="font-mono text-primary">
@@ -864,7 +864,7 @@ function RichListDistribution({
             </p>
           </div>
 
-          <div className="p-3 rounded-lg bg-muted/50 border space-y-2">
+          <div className="space-y-2 rounded-xl border border-white/[0.08] bg-[rgba(8,18,37,0.46)] p-3">
             <div className="flex items-center justify-between text-sm">
               <span>Top 100 Addresses</span>
               <span className="font-mono text-primary">

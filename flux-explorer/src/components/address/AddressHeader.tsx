@@ -62,7 +62,7 @@ export function AddressHeader({ addressInfo }: AddressHeaderProps) {
               <p className="text-sm font-medium text-muted-foreground mb-2">
                 Address
               </p>
-              <div className="flex items-center gap-2 p-4 bg-muted rounded-lg">
+              <div className="flex items-center gap-2 rounded-xl border border-white/[0.08] bg-[rgba(8,18,37,0.46)] p-4">
                 <code className="flex-1 font-mono text-sm sm:text-base break-all">
                   {addressInfo.addrStr}
                 </code>
@@ -72,7 +72,7 @@ export function AddressHeader({ addressInfo }: AddressHeaderProps) {
 
             {/* QR Code Display */}
             {showQR && (
-              <div className="flex justify-center items-center p-6 bg-card rounded-lg border">
+              <div className="flex items-center justify-center rounded-xl border border-white/[0.08] bg-[rgba(8,18,37,0.46)] p-6">
                 <div className="text-center space-y-4">
                   <div className="p-4 bg-white rounded-lg">
                     <QRCodeSVG
@@ -93,7 +93,7 @@ export function AddressHeader({ addressInfo }: AddressHeaderProps) {
 
             {/* Quick Stats */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4 pt-2">
-              <div className="p-3 rounded-lg bg-muted/50">
+              <div className="rounded-xl border border-white/[0.08] bg-[rgba(8,18,37,0.46)] p-3">
                 <p className="text-xs text-muted-foreground">Current Balance</p>
                 <p className="text-lg font-bold mt-1">
                   {addressInfo.balance.toLocaleString(undefined, {
@@ -103,13 +103,13 @@ export function AddressHeader({ addressInfo }: AddressHeaderProps) {
                   <span className="text-sm font-normal">FLUX</span>
                 </p>
               </div>
-              <div className="p-3 rounded-lg bg-muted/50">
+              <div className="rounded-xl border border-white/[0.08] bg-[rgba(8,18,37,0.46)] p-3">
                 <p className="text-xs text-muted-foreground">Transactions</p>
                 <p className="text-lg font-bold mt-1">
                   {addressInfo.txApperances.toLocaleString()}
                 </p>
               </div>
-              <div className="p-3 rounded-lg bg-muted/50">
+              <div className="rounded-xl border border-white/[0.08] bg-[rgba(8,18,37,0.46)] p-3">
                 <p className="text-xs text-muted-foreground">Unconfirmed</p>
                 <p className="text-lg font-bold mt-1">
                   {addressInfo.unconfirmedBalance.toLocaleString(undefined, {
