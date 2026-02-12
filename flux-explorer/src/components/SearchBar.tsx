@@ -25,7 +25,7 @@ export function SearchBar() {
     <form onSubmit={handleSearch} className="mx-auto w-full max-w-2xl">
       <div className="relative">
         {/* Glow effect behind the search bar */}
-        <div className="absolute -inset-1 bg-gradient-to-r from-[var(--flux-cyan)]/20 via-[var(--flux-purple)]/20 to-[var(--flux-cyan)]/20 rounded-2xl blur-lg opacity-60" />
+        <div className="pointer-events-none absolute -inset-1 rounded-2xl bg-gradient-to-r from-[var(--flux-cyan)]/20 via-[var(--flux-purple)]/20 to-[var(--flux-cyan)]/20 blur-lg opacity-60" />
 
         <div className="relative flex items-center gap-3 p-1.5 rounded-xl flux-glass-strong">
           <div className="relative flex-1">
