@@ -7,7 +7,7 @@
  * - Non-blocking: app starts immediately
  */
 
-import { getPriceDataRange, initPriceCache, setCachedPriceHourly } from './db/price-cache';
+import { batchSetPrices, getPriceDataRange, initPriceCache, setCachedPriceHourly } from './db/price-cache';
 import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
@@ -16,11 +16,13 @@ import ky from 'ky';
 let initializationStarted = false;
 let hourlyUpdateInterval: NodeJS.Timeout | null = null;
 let hourlyLockHeld = false;
+let backfillInterval: NodeJS.Timeout | null = null;
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const POPULATION_LOCK_PATH = path.join(DATA_DIR, 'price-population.lock');
 const HOURLY_LOCK_PATH = path.join(DATA_DIR, 'price-hourly.lock');
 const POPULATION_LOG_PATH = path.join(DATA_DIR, 'price-population.log');
+const RECENT_BACKFILL_HOURS = 24 * 30;
 
 function envFlag(name: string, defaultValue: boolean): boolean {
   const value = process.env[name];
@@ -88,6 +90,16 @@ function releaseLock(lockPath: string): void {
     fs.unlinkSync(lockPath);
   } catch {
     // Ignore
+  }
+}
+
+function shouldSkipBackfill(): boolean {
+  if (!fs.existsSync(POPULATION_LOCK_PATH)) return false;
+  try {
+    const stat = fs.statSync(POPULATION_LOCK_PATH);
+    return (Date.now() - stat.mtimeMs) <= (12 * 60 * 60 * 1000);
+  } catch {
+    return false;
   }
 }
 
@@ -238,6 +250,58 @@ async function updateLatestHourlyPrice(): Promise<void> {
 }
 
 /**
+ * Backfill recent hourly prices to cover downtime gaps.
+ */
+async function backfillRecentHourlyPrices(hours: number = RECENT_BACKFILL_HOURS): Promise<void> {
+  if (shouldSkipBackfill()) {
+    console.log('⏳ Skipping recent price backfill (population lock present)');
+    return;
+  }
+
+  const safeHours = Math.max(1, Math.min(Math.floor(hours), 2000));
+  const toTimestamp = Math.floor(Date.now() / 1000);
+
+  try {
+    const response = await ky.get('https://min-api.cryptocompare.com/data/v2/histohour', {
+      searchParams: {
+        fsym: 'FLUX',
+        tsym: 'USD',
+        toTs: toTimestamp.toString(),
+        limit: safeHours.toString(),
+      },
+      timeout: 30000,
+    }).json<{
+      Response: string;
+      Data: {
+        Data: Array<{
+          time: number;
+          close: number;
+        }>;
+      };
+    }>();
+
+    if (response.Response !== 'Success' || !response.Data?.Data?.length) {
+      console.warn('⚠️  Recent price backfill returned no data');
+      return;
+    }
+
+    const prices: [number, number][] = response.Data.Data
+      .filter((item) => item.close > 0)
+      .map((item) => [item.time, item.close]);
+
+    if (prices.length === 0) {
+      console.warn('⚠️  Recent price backfill contained only zero prices');
+      return;
+    }
+
+    batchSetPrices(prices);
+    console.log(`🔁 Backfilled ${prices.length.toLocaleString()} hourly prices (last ${safeHours}h)`);
+  } catch (error) {
+    console.error('❌ Failed to backfill recent prices:', error);
+  }
+}
+
+/**
  * Start continuous hourly price updates
  */
 export function startHourlyPriceUpdates(): void {
@@ -261,6 +325,13 @@ export function startHourlyPriceUpdates(): void {
 
   // Run immediately on startup
   updateLatestHourlyPrice();
+  backfillRecentHourlyPrices();
+
+  // Daily backfill to heal missed hours
+  backfillInterval = setInterval(() => {
+    touchLock(HOURLY_LOCK_PATH);
+    backfillRecentHourlyPrices();
+  }, 24 * 60 * 60 * 1000);
 
   // Then run every hour
   hourlyUpdateInterval = setInterval(() => {
@@ -277,6 +348,11 @@ export function stopHourlyPriceUpdates(): void {
     clearInterval(hourlyUpdateInterval);
     hourlyUpdateInterval = null;
     console.log('⏰ Stopped hourly price updates');
+  }
+
+  if (backfillInterval) {
+    clearInterval(backfillInterval);
+    backfillInterval = null;
   }
 
   if (hourlyLockHeld) {
