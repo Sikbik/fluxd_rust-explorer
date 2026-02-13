@@ -25,7 +25,7 @@ export function BlockHeader({ block }: BlockHeaderProps) {
           <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
             <div className="flex items-center gap-2">
               <Box className="h-5 w-5" />
-              <span className="text-xl sm:text-2xl font-bold">Block #{block.height.toLocaleString()}</span>
+              <span className="text-base sm:text-lg font-bold">Block #{block.height.toLocaleString()}</span>
             </div>
             <div className="flex items-center gap-2 text-xs sm:text-sm text-muted-foreground">
               <Clock className="h-4 w-4" />

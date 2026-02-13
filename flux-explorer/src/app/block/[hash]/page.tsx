@@ -13,7 +13,7 @@ export default function BlockPage({ params }: PageProps) {
   const isHeightQuery = /^[0-9]+$/.test(params.hash);
   const blockLabel = isHeightQuery
     ? `#${Number(params.hash).toLocaleString()}`
-    : `${params.hash.slice(0, 14)}...${params.hash.slice(-8)}`;
+    : params.hash;
 
   return (
     <ExplorerPageShell

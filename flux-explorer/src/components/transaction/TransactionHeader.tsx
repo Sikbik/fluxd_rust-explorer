@@ -21,7 +21,7 @@ export function TransactionHeader({ transaction }: TransactionHeaderProps) {
           <div className="flex items-center gap-3">
             <FileText className="h-8 w-8 text-primary" />
             <div>
-              <CardTitle className="text-2xl">Transaction</CardTitle>
+              <CardTitle className="text-lg">Transaction</CardTitle>
               <p className="text-sm text-muted-foreground mt-1">
                 {isCoinbase ? "Coinbase Transaction (Block Reward)" : "Standard Transaction"}
               </p>

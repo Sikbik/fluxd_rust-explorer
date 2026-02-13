@@ -4,7 +4,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ExplorerPageShell } from "@/components/layout/ExplorerPageShell";
 
 export const metadata = {
-  title: "Recent Blocks - Flux Explorer",
+  title: "Blocks - Flux Explorer",
   description: "Browse recent blocks on the Flux blockchain",
 };
 
@@ -36,7 +36,7 @@ export default function BlocksPage() {
   return (
     <ExplorerPageShell
       eyebrow="Chain Surface"
-      title="Recent Blocks"
+      title="Blocks"
       description="Browse the latest Flux blocks in a live, high-frequency stream with PoUW confirmation context."
       chips={["Live chain feed", "PoUW confirmations", "Real-time cadence"]}
     >

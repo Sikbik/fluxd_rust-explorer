@@ -10,12 +10,10 @@ interface PageProps {
 }
 
 export default function TransactionPage({ params }: PageProps) {
-  const txLabel = `${params.txid.slice(0, 14)}...${params.txid.slice(-8)}`;
-
   return (
     <ExplorerPageShell
       eyebrow="Transaction Trace"
-      title={`Transaction ${txLabel}`}
+      title={`Transaction ${params.txid}`}
       description="Analyze signatures, inputs, outputs, fees, and raw wire data for a single transaction."
       chips={["Forensic transaction view", "Input/output breakdown", "Raw data + structure"]}
     >

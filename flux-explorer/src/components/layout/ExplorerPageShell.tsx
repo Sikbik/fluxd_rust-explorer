@@ -46,7 +46,7 @@ export function ExplorerPageShell({
                   {eyebrow}
                 </p>
               ) : null}
-              <h1 className="mt-1.5 bg-[linear-gradient(120deg,#f7fdff_10%,#97f6ff_42%,#dbb3ff_82%,#f8fdff_100%)] bg-clip-text text-[2rem] font-black uppercase tracking-[0.08em] text-transparent drop-shadow-[0_0_24px_rgba(56,232,255,0.32)] sm:text-5xl sm:tracking-[0.11em]">
+              <h1 className="mt-1.5 break-words bg-[linear-gradient(120deg,#f7fdff_10%,#97f6ff_42%,#dbb3ff_82%,#f8fdff_100%)] bg-clip-text text-[1.2rem] font-black tracking-[0.01em] text-transparent drop-shadow-[0_0_24px_rgba(56,232,255,0.32)] sm:text-2xl sm:tracking-[0.02em] lg:text-[1.9rem] lg:tracking-[0.03em] leading-tight">
                 {title}
               </h1>
               {description ? (

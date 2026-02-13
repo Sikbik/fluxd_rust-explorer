@@ -26,7 +26,7 @@ export function AddressHeader({ addressInfo }: AddressHeaderProps) {
             <div className="flex items-center gap-3">
               <Wallet className="h-8 w-8 text-primary" />
               <div>
-                <CardTitle className="text-2xl">Address</CardTitle>
+                <CardTitle className="text-lg">Address</CardTitle>
                 <p className="text-sm text-muted-foreground mt-1">
                   Flux Blockchain Address
                 </p>

@@ -10,12 +10,10 @@ interface PageProps {
 }
 
 export default function AddressPage({ params }: PageProps) {
-  const addressLabel = `${params.address.slice(0, 10)}...${params.address.slice(-8)}`;
-
   return (
     <ExplorerPageShell
       eyebrow="Address Telemetry"
-      title={`Address ${addressLabel}`}
+      title={`Address ${params.address}`}
       description="Track balance movement, fluxnode activity, and chronological transfer flow for this wallet."
       chips={["Live address stream", "Balance intelligence", "Export-ready history"]}
     >
