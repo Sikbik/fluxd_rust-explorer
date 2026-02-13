@@ -12,6 +12,28 @@ const V2_FLUXNODE_COLLAT_CUMULUS: Amount = 1_000 * COIN;
 const V2_FLUXNODE_COLLAT_NIMBUS: Amount = 12_500 * COIN;
 const V2_FLUXNODE_COLLAT_STRATUS: Amount = 40_000 * COIN;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FluxnodeCollateralKind {
+    V1Cumulus,
+    V1Nimbus,
+    V1Stratus,
+    V2Cumulus,
+    V2Nimbus,
+    V2Stratus,
+}
+
+pub fn fluxnode_collateral_kind(amount: Amount) -> Option<FluxnodeCollateralKind> {
+    match amount {
+        V1_FLUXNODE_COLLAT_CUMULUS => Some(FluxnodeCollateralKind::V1Cumulus),
+        V1_FLUXNODE_COLLAT_NIMBUS => Some(FluxnodeCollateralKind::V1Nimbus),
+        V1_FLUXNODE_COLLAT_STRATUS => Some(FluxnodeCollateralKind::V1Stratus),
+        V2_FLUXNODE_COLLAT_CUMULUS => Some(FluxnodeCollateralKind::V2Cumulus),
+        V2_FLUXNODE_COLLAT_NIMBUS => Some(FluxnodeCollateralKind::V2Nimbus),
+        V2_FLUXNODE_COLLAT_STRATUS => Some(FluxnodeCollateralKind::V2Stratus),
+        _ => None,
+    }
+}
+
 pub fn block_subsidy(height: i32, params: &ConsensusParams) -> Amount {
     if network_upgrade_active(height, &params.upgrades, UpgradeIndex::Pon) {
         let mut subsidy = params.pon_initial_subsidy as Amount * COIN;

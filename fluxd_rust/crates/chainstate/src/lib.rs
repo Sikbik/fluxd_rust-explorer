@@ -2,6 +2,7 @@
 
 pub mod address_deltas;
 pub mod address_index;
+pub mod address_balance;
 pub mod address_neighbors;
 pub mod address_tx_index;
 pub mod anchors;

@@ -293,9 +293,18 @@ app.listen(env.port, '0.0.0.0', () => {
   let warmupInterval: NodeJS.Timeout | null = null;
 
   async function runWarmups(): Promise<void> {
-    fetch(`http://127.0.0.1:${env.port}/api/v1/supply`).catch(() => undefined);
-    fetch(`http://127.0.0.1:${env.port}/api/v1/blocks/latest?limit=6`).catch(() => undefined);
-    fetch(`http://127.0.0.1:${env.port}/api/v1/stats/dashboard`).catch(() => undefined);
+    const warmupUrls = [
+      `http://127.0.0.1:${env.port}/api/v1/supply`,
+      `http://127.0.0.1:${env.port}/api/v1/blocks/latest?limit=6`,
+      `http://127.0.0.1:${env.port}/api/v1/stats/dashboard`,
+      `http://127.0.0.1:${env.port}/api/v1/richlist?page=1&pageSize=1000&minBalance=1`,
+    ];
+
+    await Promise.allSettled(
+      warmupUrls.map((url) =>
+        fetch(url, { signal: AbortSignal.timeout(15_000) }).catch(() => undefined)
+      )
+    );
   }
 
   async function startWarmupsWhenReady(): Promise<void> {

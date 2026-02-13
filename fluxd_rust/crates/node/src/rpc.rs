@@ -77,27 +77,17 @@ impl RichListCache {
                 break;
             }
 
-            let mut tx_count = 0u64;
-            let mut last_seen: Option<(u32, u32, Hash256)> = None;
-            let end_height = u32::try_from(self.last_block_height.max(0)).unwrap_or(u32::MAX);
-
-            let mut visitor = |delta: fluxd_chainstate::address_deltas::AddressDeltaEntry| {
-                let key = (delta.height, delta.tx_index, delta.txid);
-                if last_seen != Some(key) {
-                    tx_count = tx_count.saturating_add(1);
-                    last_seen = Some(key);
+            let tx_count = match chainstate.address_tx_total(&row.script_hash) {
+                Ok(Some(total)) => total,
+                Ok(None) => 0,
+                Err(err) => {
+                    log_warn!(
+                        "richlist txCount lookup failed for {}: {err}",
+                        &row.address
+                    );
+                    0
                 }
-                Ok(())
             };
-
-            if let Err(err) = chainstate.for_each_address_delta_range(&row.script_hash, 0, end_height, &mut visitor)
-            {
-                log_warn!(
-                    "richlist txCount scan failed for {}: {err}",
-                    &row.address
-                );
-                tx_count = 0;
-            }
 
             let rank = start
                 .saturating_add(addresses.len())
@@ -128,9 +118,47 @@ impl RichListCache {
     }
 }
 
+fn richlist_tier_counts(
+    entry: &AddressBalanceEntry,
+    height: i32,
+    params: &fluxd_consensus::FluxnodeParams,
+) -> (u32, u32, u32) {
+    let height = height as i64;
+    let select = |start: i64, end: i64, v1: u32, v2: u32| -> u32 {
+        if height < start {
+            v1
+        } else if height < end {
+            v1.saturating_add(v2)
+        } else {
+            v2
+        }
+    };
+
+    let cumulus = select(
+        params.cumulus_transition_start,
+        params.cumulus_transition_end,
+        entry.v1_cumulus,
+        entry.v2_cumulus,
+    );
+    let nimbus = select(
+        params.nimbus_transition_start,
+        params.nimbus_transition_end,
+        entry.v1_nimbus,
+        entry.v2_nimbus,
+    );
+    let stratus = select(
+        params.stratus_transition_start,
+        params.stratus_transition_end,
+        entry.v1_stratus,
+        entry.v2_stratus,
+    );
+
+    (cumulus, nimbus, stratus)
+}
+
 static RICHLIST_CACHE: std::sync::OnceLock<std::sync::Mutex<Option<RichListCache>>> = std::sync::OnceLock::new();
 static RICHLIST_REFRESH_IN_FLIGHT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-const RICHLIST_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(2 * 60);
+const RICHLIST_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(30);
 
 static ADDR_NEIGHBORS_REINDEX_IN_FLIGHT: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
@@ -190,72 +218,37 @@ fn refresh_richlist_cache<S: fluxd_storage::KeyValueStore>(
     let utxo_stats = chainstate.utxo_stats_or_compute().map_err(map_internal)?;
     let total_supply = utxo_stats.total_amount;
 
-    struct RichListAccum {
-        balance: i64,
-        script_hash: Hash256,
-        cumulus_count: u32,
-        nimbus_count: u32,
-        stratus_count: u32,
+    if chainstate
+        .address_balance_meta()
+        .map_err(map_internal)?
+        .is_none()
+    {
+        chainstate
+            .rebuild_address_balance_index(chain_params)
+            .map_err(map_internal)?;
     }
 
-    let mut balances: HashMap<String, RichListAccum> = HashMap::new();
-
+    let mut rows: Vec<RichListRow> = Vec::new();
     chainstate
-        .for_each_utxo_entry(&mut |entry| {
-            if entry.value <= 0 {
+        .for_each_address_balance(&mut |script_hash, entry| {
+            if entry.balance <= 0 {
                 return Ok(());
             }
-            let Some(address) =
-                script_pubkey_to_address(&entry.script_pubkey, chain_params.network)
-            else {
-                return Ok(());
-            };
-
-            let Some(script_hash) = fluxd_chainstate::address_index::script_hash(&entry.script_pubkey) else {
-                return Ok(());
-            };
-
-            let slot = balances.entry(address).or_insert(RichListAccum {
-                balance: 0,
+            let (cumulus_count, nimbus_count, stratus_count) =
+                richlist_tier_counts(&entry, best_height, &chain_params.fluxnode);
+            rows.push(RichListRow {
+                address: entry.address,
                 script_hash,
-                cumulus_count: 0,
-                nimbus_count: 0,
-                stratus_count: 0,
+                balance: entry.balance,
+                cumulus_count,
+                nimbus_count,
+                stratus_count,
             });
-
-            slot.balance = slot
-                .balance
-                .checked_add(entry.value)
-                .ok_or_else(|| fluxd_storage::StoreError::Backend("address balance overflow".to_string()))?;
-
-            if let Some(tier) =
-                fluxd_consensus::fluxnode_tier_from_collateral(best_height, entry.value, &chain_params.fluxnode)
-            {
-                match tier {
-                    1 => slot.cumulus_count = slot.cumulus_count.saturating_add(1),
-                    2 => slot.nimbus_count = slot.nimbus_count.saturating_add(1),
-                    3 => slot.stratus_count = slot.stratus_count.saturating_add(1),
-                    _ => {}
-                }
-            }
-
             Ok(())
         })
         .map_err(map_internal)?;
 
-    let total_addresses = balances.len() as u64;
-
-    let mut rows: Vec<RichListRow> = balances
-        .into_iter()
-        .map(|(address, accum)| RichListRow {
-            address,
-            script_hash: accum.script_hash,
-            balance: accum.balance,
-            cumulus_count: accum.cumulus_count,
-            nimbus_count: accum.nimbus_count,
-            stratus_count: accum.stratus_count,
-        })
-        .collect();
+    let total_addresses = rows.len() as u64;
     rows.sort_unstable_by(|a, b| b.balance.cmp(&a.balance).then_with(|| a.address.cmp(&b.address)));
 
     let mut guard = richlist_cache()
@@ -285,6 +278,7 @@ use zcash_protocol::value::Zatoshis;
 use fluxd_chainstate::address_neighbors::{
     address_id_from_script_pubkey, AddressId, AddressNeighborBuildState, AddressNeighborStats,
 };
+use fluxd_chainstate::address_balance::AddressBalanceEntry;
 use fluxd_chainstate::index::HeaderEntry;
 use fluxd_chainstate::state::{ChainState, ChainStateError};
 use fluxd_chainstate::validation::ValidationFlags;

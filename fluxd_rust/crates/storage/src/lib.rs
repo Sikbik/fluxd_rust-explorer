@@ -40,6 +40,7 @@ pub enum Column {
     FluxnodeKey,
     AddressOutpoint,
     AddressDelta,
+    AddressBalance,
     AddressTxTotal,
     AddressTxCheckpoint,
     AddressNeighbor,
@@ -52,7 +53,7 @@ pub enum Column {
 }
 
 impl Column {
-    pub const ALL: [Column; 24] = [
+    pub const ALL: [Column; 25] = [
         Column::BlockIndex,
         Column::HeaderIndex,
         Column::HeightIndex,
@@ -68,6 +69,7 @@ impl Column {
         Column::FluxnodeKey,
         Column::AddressOutpoint,
         Column::AddressDelta,
+        Column::AddressBalance,
         Column::AddressTxTotal,
         Column::AddressTxCheckpoint,
         Column::AddressNeighbor,
@@ -96,15 +98,16 @@ impl Column {
             Column::FluxnodeKey => 1 << 12,
             Column::AddressOutpoint => 1 << 13,
             Column::AddressDelta => 1 << 14,
-            Column::AddressTxTotal => 1 << 15,
-            Column::AddressTxCheckpoint => 1 << 16,
-            Column::AddressNeighbor => 1 << 17,
-            Column::AddressNeighborRank => 1 << 18,
-            Column::TimestampIndex => 1 << 19,
-            Column::BlockTimestamp => 1 << 20,
-            Column::BlockUndo => 1 << 21,
-            Column::Meta => 1 << 22,
-            Column::UnconnectedBlock => 1 << 23,
+            Column::AddressBalance => 1 << 15,
+            Column::AddressTxTotal => 1 << 16,
+            Column::AddressTxCheckpoint => 1 << 17,
+            Column::AddressNeighbor => 1 << 18,
+            Column::AddressNeighborRank => 1 << 19,
+            Column::TimestampIndex => 1 << 20,
+            Column::BlockTimestamp => 1 << 21,
+            Column::BlockUndo => 1 << 22,
+            Column::Meta => 1 << 23,
+            Column::UnconnectedBlock => 1 << 24,
         }
     }
 
@@ -129,6 +132,7 @@ impl Column {
             Column::FluxnodeKey => "fluxnode_key",
             Column::AddressOutpoint => "address_outpoint",
             Column::AddressDelta => "address_delta",
+            Column::AddressBalance => "address_balance",
             Column::AddressTxTotal => "address_tx_total",
             Column::AddressTxCheckpoint => "address_tx_checkpoint",
             Column::AddressNeighbor => "address_neighbor",

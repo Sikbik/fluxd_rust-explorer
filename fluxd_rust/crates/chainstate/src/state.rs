@@ -14,13 +14,14 @@ use fluxd_consensus::constants::{
 use fluxd_consensus::money::MAX_MONEY;
 use fluxd_consensus::upgrades::{current_epoch_branch_id, network_upgrade_active, UpgradeIndex};
 use fluxd_consensus::{
-    block_subsidy, exchange_fund_amount, fluxnode_collateral_matches_tier, fluxnode_subsidy,
-    fluxnode_tier_from_collateral, foundation_fund_amount, is_swap_pool_interval,
-    min_dev_fund_amount, swap_pool_amount, ChainParams, ConsensusParams, Hash256,
+    block_subsidy, exchange_fund_amount, fluxnode_collateral_kind,
+    fluxnode_collateral_matches_tier, fluxnode_subsidy, fluxnode_tier_from_collateral,
+    foundation_fund_amount, is_swap_pool_interval, min_dev_fund_amount, swap_pool_amount,
+    ChainParams, ConsensusParams, FluxnodeCollateralKind, Hash256,
 };
 use fluxd_fluxnode::cache::{apply_fluxnode_tx, FluxnodeStartMeta};
 use fluxd_fluxnode::storage::{FluxnodeRecord, KeyId};
-use fluxd_primitives::address_to_script_pubkey;
+use fluxd_primitives::{address_to_script_pubkey, script_pubkey_to_address};
 use fluxd_primitives::block::Block;
 use fluxd_primitives::encoding::{Decodable, DecodeError, Decoder, Encoder};
 use fluxd_primitives::hash::hash160;
@@ -35,6 +36,7 @@ use sha2::Digest as _;
 use sha2::Sha256;
 
 use crate::address_deltas::AddressDeltaIndex;
+use crate::address_balance::{AddressBalanceEntry, AddressBalanceIndex};
 use crate::address_index::AddressIndex;
 use crate::address_tx_index::{AddressTxCursor, AddressTxIndex, DEFAULT_CHECKPOINT_INTERVAL};
 use crate::anchors::{AnchorSet, NullifierSet};
@@ -116,6 +118,76 @@ struct CreatedUtxo {
     outpoint: OutPoint,
     entry: UtxoEntry,
     address_key: Option<Hash256>,
+}
+
+#[derive(Default)]
+struct AddressBalanceDelta {
+    balance: i64,
+    v1_cumulus: i64,
+    v1_nimbus: i64,
+    v1_stratus: i64,
+    v2_cumulus: i64,
+    v2_nimbus: i64,
+    v2_stratus: i64,
+    address: Option<String>,
+}
+
+impl AddressBalanceDelta {
+    fn apply(&mut self, amount: i64, kind: Option<FluxnodeCollateralKind>, is_add: bool) {
+        let signed = if is_add { amount } else { -amount };
+        self.balance = self.balance.saturating_add(signed);
+        let delta = if is_add { 1 } else { -1 };
+        match kind {
+            Some(FluxnodeCollateralKind::V1Cumulus) => self.v1_cumulus += delta,
+            Some(FluxnodeCollateralKind::V1Nimbus) => self.v1_nimbus += delta,
+            Some(FluxnodeCollateralKind::V1Stratus) => self.v1_stratus += delta,
+            Some(FluxnodeCollateralKind::V2Cumulus) => self.v2_cumulus += delta,
+            Some(FluxnodeCollateralKind::V2Nimbus) => self.v2_nimbus += delta,
+            Some(FluxnodeCollateralKind::V2Stratus) => self.v2_stratus += delta,
+            None => {}
+        }
+    }
+}
+
+fn record_address_balance_delta(
+    deltas: &mut HashMap<Hash256, AddressBalanceDelta>,
+    script_pubkey: &[u8],
+    amount: i64,
+    params: &ChainParams,
+    is_add: bool,
+) {
+    if amount <= 0 {
+        return;
+    }
+    let Some(script_hash) = crate::address_index::script_hash(script_pubkey) else {
+        return;
+    };
+    let Some(address) = script_pubkey_to_address(script_pubkey, params.network) else {
+        return;
+    };
+    let entry = deltas.entry(script_hash).or_default();
+    if entry.address.is_none() {
+        entry.address = Some(address);
+    }
+    let kind = fluxnode_collateral_kind(amount);
+    entry.apply(amount, kind, is_add);
+}
+
+fn record_address_balance_delta_no_address(
+    deltas: &mut HashMap<Hash256, AddressBalanceDelta>,
+    script_pubkey: &[u8],
+    amount: i64,
+    is_add: bool,
+) {
+    if amount <= 0 {
+        return;
+    }
+    let Some(script_hash) = crate::address_index::script_hash(script_pubkey) else {
+        return;
+    };
+    let entry = deltas.entry(script_hash).or_default();
+    let kind = fluxnode_collateral_kind(amount);
+    entry.apply(amount, kind, is_add);
 }
 
 #[derive(Debug)]
@@ -636,6 +708,7 @@ pub struct ChainState<S> {
     address_index: AddressIndex<Arc<S>>,
     address_deltas: AddressDeltaIndex<Arc<S>>,
     address_tx_index: AddressTxIndex<Arc<S>>,
+    address_balance: AddressBalanceIndex<Arc<S>>,
     tx_index: TxIndex<Arc<S>>,
     spent_index: SpentIndex<Arc<S>>,
     index: ChainIndex<S>,
@@ -669,6 +742,7 @@ impl<S: KeyValueStore> ChainState<S> {
             address_index: AddressIndex::new(Arc::clone(&store)),
             address_deltas: AddressDeltaIndex::new(Arc::clone(&store)),
             address_tx_index: AddressTxIndex::new(Arc::clone(&store)),
+            address_balance: AddressBalanceIndex::new(Arc::clone(&store)),
             tx_index: TxIndex::new(Arc::clone(&store)),
             spent_index: SpentIndex::new(Arc::clone(&store)),
             index: ChainIndex::new(Arc::clone(&store)),
@@ -2393,6 +2467,7 @@ impl<S: KeyValueStore> ChainState<S> {
         let mut created_utxos: HashMap<OutPointKey, CreatedUtxo> =
             HashMap::with_capacity(estimated_outputs);
         let mut address_tx_events: HashMap<Hash256, SmallVec<[[u8; 77]; 8]>> = HashMap::new();
+        let mut address_balance_deltas: HashMap<Hash256, AddressBalanceDelta> = HashMap::new();
         let mut spent_outpoints: HashSet<OutPointKey> = HashSet::with_capacity(estimated_inputs);
         let mut block_script_checks: Vec<ScriptCheck> = Vec::new();
         let branch_id = current_epoch_branch_id(height, &consensus.upgrades);
@@ -2571,6 +2646,13 @@ impl<S: KeyValueStore> ChainState<S> {
                         .value
                         .checked_neg()
                         .ok_or(ChainStateError::ValueOutOfRange)?;
+                    record_address_balance_delta(
+                        &mut address_balance_deltas,
+                        &entry.script_pubkey,
+                        entry.value,
+                        params,
+                        false,
+                    );
                     utxos_spent = utxos_spent
                         .checked_add(1)
                         .ok_or(ChainStateError::ValueOutOfRange)?;
@@ -2750,6 +2832,13 @@ impl<S: KeyValueStore> ChainState<S> {
                 value_created = value_created
                     .checked_add(output.value)
                     .ok_or(ChainStateError::ValueOutOfRange)?;
+                record_address_balance_delta(
+                    &mut address_balance_deltas,
+                    &output.script_pubkey,
+                    output.value,
+                    params,
+                    true,
+                );
                 let index_start = Instant::now();
                 if let Some(key) = address_key.as_ref() {
                     address_delta_inserts = address_delta_inserts.saturating_add(1);
@@ -2849,6 +2938,10 @@ impl<S: KeyValueStore> ChainState<S> {
                     );
                 }
             }
+        }
+
+        if !address_balance_deltas.is_empty() {
+            self.apply_address_balance_deltas(&mut batch, address_balance_deltas)?;
         }
 
         let fluxnode_sig_checks_count = fluxnode_sig_checks.len() as u64;
@@ -3264,6 +3357,7 @@ impl<S: KeyValueStore> ChainState<S> {
         let mut value_restored = 0i64;
 
         let mut address_tx_events: HashMap<Hash256, SmallVec<[[u8; 77]; 8]>> = HashMap::new();
+        let mut address_balance_deltas: HashMap<Hash256, AddressBalanceDelta> = HashMap::new();
 
         for tx in &block.transactions {
             for joinsplit in &tx.join_splits {
@@ -3333,6 +3427,12 @@ impl<S: KeyValueStore> ChainState<S> {
                 value_removed = value_removed
                     .checked_add(output.value)
                     .ok_or(ChainStateError::ValueOutOfRange)?;
+                record_address_balance_delta_no_address(
+                    &mut address_balance_deltas,
+                    &output.script_pubkey,
+                    output.value,
+                    false,
+                );
             }
             self.tx_index.delete(&mut batch, &txid);
 
@@ -3393,6 +3493,12 @@ impl<S: KeyValueStore> ChainState<S> {
                     value_restored = value_restored
                         .checked_add(spent.entry.value)
                         .ok_or(ChainStateError::ValueOutOfRange)?;
+                    record_address_balance_delta_no_address(
+                        &mut address_balance_deltas,
+                        &spent.entry.script_pubkey,
+                        spent.entry.value,
+                        true,
+                    );
                 }
             }
 
@@ -3531,6 +3637,10 @@ impl<S: KeyValueStore> ChainState<S> {
                     );
                 }
             }
+        }
+
+        if !address_balance_deltas.is_empty() {
+            self.apply_address_balance_deltas(&mut batch, address_balance_deltas)?;
         }
 
         if let Ok(mut cache) = self.header_cache.lock() {
@@ -4215,6 +4325,26 @@ impl<S: KeyValueStore> ChainState<S> {
         Ok(Some(stats))
     }
 
+    pub fn address_balance_meta(&self) -> Result<Option<i64>, ChainStateError> {
+        let bytes = match self.store.get(Column::Meta, ADDRESS_BALANCE_META_KEY)? {
+            Some(bytes) => bytes,
+            None => return Ok(None),
+        };
+        if bytes.len() != 8 {
+            return Err(ChainStateError::CorruptIndex(
+                "invalid address balance meta",
+            ));
+        }
+        let height = i64::from_le_bytes(bytes.as_slice().try_into().map_err(|_| {
+            ChainStateError::CorruptIndex("invalid address balance meta")
+        })?);
+        Ok(Some(height))
+    }
+
+    pub fn update_address_balance_meta(&self, batch: &mut WriteBatch, height: i64) {
+        batch.put(Column::Meta, ADDRESS_BALANCE_META_KEY, height.to_le_bytes());
+    }
+
     pub fn index_stats(&self) -> Result<Option<IndexStats>, ChainStateError> {
         let bytes = match self.store.get(Column::Meta, INDEX_STATS_KEY)? {
             Some(bytes) => bytes,
@@ -4288,6 +4418,167 @@ impl<S: KeyValueStore> ChainState<S> {
             visitor(&entry)
         };
         self.store.for_each_prefix(Column::Utxo, &[], &mut adapter)?;
+        Ok(())
+    }
+
+    pub fn address_balance_entry(
+        &self,
+        script_hash: &Hash256,
+    ) -> Result<Option<AddressBalanceEntry>, ChainStateError> {
+        Ok(self.address_balance.get(script_hash)?)
+    }
+
+    pub fn for_each_address_balance(
+        &self,
+        visitor: &mut dyn FnMut(Hash256, AddressBalanceEntry) -> Result<(), StoreError>,
+    ) -> Result<(), ChainStateError> {
+        self.address_balance
+            .for_each(visitor)
+            .map_err(ChainStateError::from)
+    }
+
+    pub fn rebuild_address_balance_index(
+        &self,
+        params: &ChainParams,
+    ) -> Result<i64, ChainStateError> {
+        let best = self.best_block()?;
+        let best_height = best.map(|tip| tip.height.max(0) as i64).unwrap_or(0);
+
+        let mut balances: HashMap<Hash256, AddressBalanceEntry> = HashMap::new();
+
+        self.for_each_utxo_entry(&mut |entry| {
+            if entry.value <= 0 {
+                return Ok(());
+            }
+            let Some(script_hash) = crate::address_index::script_hash(&entry.script_pubkey) else {
+                return Ok(());
+            };
+            let Some(address) =
+                script_pubkey_to_address(&entry.script_pubkey, params.network)
+            else {
+                return Ok(());
+            };
+            let balance_entry = balances
+                .entry(script_hash)
+                .or_insert_with(|| AddressBalanceEntry::new(address));
+            balance_entry.balance = balance_entry
+                .balance
+                .checked_add(entry.value)
+                .ok_or_else(|| StoreError::Backend("address balance overflow".to_string()))?;
+
+            if let Some(kind) = fluxnode_collateral_kind(entry.value) {
+                match kind {
+                    FluxnodeCollateralKind::V1Cumulus => {
+                        balance_entry.v1_cumulus = balance_entry.v1_cumulus.saturating_add(1)
+                    }
+                    FluxnodeCollateralKind::V1Nimbus => {
+                        balance_entry.v1_nimbus = balance_entry.v1_nimbus.saturating_add(1)
+                    }
+                    FluxnodeCollateralKind::V1Stratus => {
+                        balance_entry.v1_stratus = balance_entry.v1_stratus.saturating_add(1)
+                    }
+                    FluxnodeCollateralKind::V2Cumulus => {
+                        balance_entry.v2_cumulus = balance_entry.v2_cumulus.saturating_add(1)
+                    }
+                    FluxnodeCollateralKind::V2Nimbus => {
+                        balance_entry.v2_nimbus = balance_entry.v2_nimbus.saturating_add(1)
+                    }
+                    FluxnodeCollateralKind::V2Stratus => {
+                        balance_entry.v2_stratus = balance_entry.v2_stratus.saturating_add(1)
+                    }
+                }
+            }
+
+            Ok(())
+        })?;
+
+        let existing_keys = self.address_balance.scan_keys()?;
+        let mut batch = WriteBatch::new();
+        for key in existing_keys {
+            self.address_balance.delete(&mut batch, &key);
+        }
+        for (script_hash, entry) in balances {
+            self.address_balance.put(&mut batch, &script_hash, &entry);
+        }
+        self.update_address_balance_meta(&mut batch, best_height);
+        self.commit_batch(batch)?;
+
+        Ok(best_height)
+    }
+
+    fn apply_address_balance_deltas(
+        &self,
+        batch: &mut WriteBatch,
+        deltas: HashMap<Hash256, AddressBalanceDelta>,
+    ) -> Result<(), ChainStateError> {
+        let apply_u32_delta = |value: u32, delta: i64| -> Result<u32, ChainStateError> {
+            if delta >= 0 {
+                let add = u32::try_from(delta).map_err(|_| ChainStateError::ValueOutOfRange)?;
+                value.checked_add(add).ok_or(ChainStateError::ValueOutOfRange)
+            } else {
+                let sub = u32::try_from(-delta).map_err(|_| ChainStateError::ValueOutOfRange)?;
+                value.checked_sub(sub).ok_or(ChainStateError::ValueOutOfRange)
+            }
+        };
+
+        for (script_hash, delta) in deltas {
+            if delta.balance == 0
+                && delta.v1_cumulus == 0
+                && delta.v1_nimbus == 0
+                && delta.v1_stratus == 0
+                && delta.v2_cumulus == 0
+                && delta.v2_nimbus == 0
+                && delta.v2_stratus == 0
+            {
+                continue;
+            }
+
+            let address = delta.address.clone();
+            let missing_entry = self.address_balance.get(&script_hash)?;
+            let mut entry = match missing_entry {
+                Some(entry) => entry,
+                None => {
+                    let has_negative = delta.balance < 0
+                        || delta.v1_cumulus < 0
+                        || delta.v1_nimbus < 0
+                        || delta.v1_stratus < 0
+                        || delta.v2_cumulus < 0
+                        || delta.v2_nimbus < 0
+                        || delta.v2_stratus < 0;
+                    if has_negative {
+                        continue;
+                    }
+                    let Some(address) = address.clone() else {
+                        continue;
+                    };
+                    AddressBalanceEntry::new(address)
+                }
+            };
+
+            if entry.address.is_empty() {
+                if let Some(address) = address {
+                    entry.address = address;
+                }
+            }
+
+            entry.balance = entry
+                .balance
+                .checked_add(delta.balance)
+                .ok_or(ChainStateError::ValueOutOfRange)?;
+            entry.v1_cumulus = apply_u32_delta(entry.v1_cumulus, delta.v1_cumulus)?;
+            entry.v1_nimbus = apply_u32_delta(entry.v1_nimbus, delta.v1_nimbus)?;
+            entry.v1_stratus = apply_u32_delta(entry.v1_stratus, delta.v1_stratus)?;
+            entry.v2_cumulus = apply_u32_delta(entry.v2_cumulus, delta.v2_cumulus)?;
+            entry.v2_nimbus = apply_u32_delta(entry.v2_nimbus, delta.v2_nimbus)?;
+            entry.v2_stratus = apply_u32_delta(entry.v2_stratus, delta.v2_stratus)?;
+
+            if entry.is_empty() {
+                self.address_balance.delete(batch, &script_hash);
+            } else {
+                self.address_balance.put(batch, &script_hash, &entry);
+            }
+        }
+
         Ok(())
     }
 
@@ -4689,6 +4980,7 @@ const SAPLING_TREE_KEY: &[u8] = b"sapling_tree";
 const UTXO_STATS_KEY: &[u8] = b"utxo_stats_v1";
 const VALUE_POOLS_KEY: &[u8] = b"value_pools_v1";
 const INDEX_STATS_KEY: &[u8] = b"index_stats_v1";
+const ADDRESS_BALANCE_META_KEY: &[u8] = b"address_balance_v1";
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct UtxoStats {
