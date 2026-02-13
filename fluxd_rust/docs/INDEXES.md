@@ -96,6 +96,48 @@ Notes:
 - Only standard transparent addressable scripts are indexed (P2PKH/P2SH).
 - P2PK outputs are normalized to their corresponding P2PKH address.
 
+## AddressTxTotal
+
+- Key: `sha256(script_pubkey)` (32 bytes)
+- Value: total count (8 bytes LE, `u64`)
+
+Stores the total number of address-delta entries for a given script hash.
+Used to support efficient pagination for address history endpoints.
+
+## AddressTxCheckpoint
+
+- Key: `sha256(script_pubkey)` (32 bytes) + `checkpoint_index` (4 bytes BE)
+- Value: `AddressTxCursor` (40 bytes)
+  - `height` (4 bytes LE, `u32`)
+  - `tx_index` (4 bytes LE, `u32`)
+  - `txid` (32 bytes)
+
+Stores periodic cursors (every `DEFAULT_CHECKPOINT_INTERVAL` entries) into the
+address-delta stream so deep pagination can skip ahead without scanning from
+the beginning.
+
+## AddressNeighbor
+
+- Key: `generation` (2 bytes BE, `u16`) + `AddressId(a)` (21 bytes) + `AddressId(b)` (21 bytes)
+- Value: `AddressNeighborStats` (32 bytes)
+  - `inbound_tx_count` (8 bytes LE, `u64`)
+  - `outbound_tx_count` (8 bytes LE, `u64`)
+  - `inbound_value_sat` (8 bytes LE, `u64`)
+  - `outbound_value_sat` (8 bytes LE, `u64`)
+
+Directional address-to-address aggregation for transparent scripts (P2PKH/P2SH).
+This index is designed for fast “constellation / neighborhood” style queries.
+
+## AddressNeighborRank
+
+- Key: `generation` (2 bytes BE, `u16`) + `AddressId(a)` (21 bytes) + `inv_total_value_sat` (8 bytes BE) + `inv_total_tx_count` (8 bytes BE) + `AddressId(b)` (21 bytes)
+- Value: `AddressNeighborStats` (same encoding as `AddressNeighbor`)
+
+Ranked view of `AddressNeighbor` that supports “top N neighbors” queries via a
+prefix scan on `(generation, AddressId(a))`. The rank key is sorted by
+descending total value and then descending total tx count using inverted
+unsigned integers.
+
 ## Fluxnode
 
 - Key: collateral `OutPoint` (36 bytes)

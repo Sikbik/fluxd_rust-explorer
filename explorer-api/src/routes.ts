@@ -3,6 +3,8 @@ import type { Env } from './env.js';
 import { getDaemonStatus } from './fluxd-rpc.js';
 import {
   getAddressSummary,
+  getAddressBalances,
+  getAddressNeighbors,
   getAddressTransactions,
   getAddressUtxos,
   getBlockByHash,
@@ -106,8 +108,10 @@ function normalizePath(path: string): string {
   }
 
   if (path.startsWith('/api/v1/addresses/')) {
+    if (path === '/api/v1/addresses/balances') return '/api/v1/addresses/balances';
     if (path.endsWith('/transactions')) return '/api/v1/addresses/:address/transactions';
     if (path.endsWith('/utxos')) return '/api/v1/addresses/:address/utxos';
+    if (path.endsWith('/neighbors')) return '/api/v1/addresses/:address/neighbors';
     return '/api/v1/addresses/:address';
   }
 
@@ -761,6 +765,35 @@ export function registerRoutes(app: Express, env: Env) {
     return refresh;
   }
 
+  app.post('/api/v1/addresses/balances', async (req: Request, res: Response) => {
+    try {
+      const body = (req.body ?? {}) as { addresses?: unknown; maxUtxos?: unknown };
+      const addressesRaw = body.addresses;
+      if (!Array.isArray(addressesRaw)) {
+        badRequest(res, 'invalid_request', 'addresses must be an array');
+        return;
+      }
+
+      const addresses = addressesRaw
+        .map((entry) => String(entry).trim())
+        .filter((entry) => entry.length > 0)
+        .slice(0, 60);
+
+      if (addresses.length === 0) {
+        badRequest(res, 'invalid_request', 'addresses must contain at least one entry');
+        return;
+      }
+
+      const maxUtxos = clampInt(toInt(body.maxUtxos) ?? 100_000, 1, 500_000);
+
+      const response = await getAddressBalances(env, addresses, { maxUtxos });
+      res.setHeader('Cache-Control', 'public, max-age=0, s-maxage=15, stale-while-revalidate=60');
+      res.status(200).json(response);
+    } catch (error) {
+      upstreamUnavailable(res, 'upstream_unavailable', error instanceof Error ? error.message : 'Unknown error');
+    }
+  });
+
   app.get('/api/v1/addresses/:address', async (req: Request, res: Response) => {
     const address = req.params.address;
     const now = Date.now();
@@ -805,6 +838,18 @@ export function registerRoutes(app: Express, env: Env) {
     }
   });
 
+  app.get('/api/v1/addresses/:address/neighbors', async (req: Request, res: Response) => {
+    try {
+      const address = req.params.address;
+      const limit = clampInt(toInt(req.query.limit) ?? 50, 1, 200);
+      const response = await getAddressNeighbors(env, address, { limit });
+      res.setHeader('Cache-Control', 'public, max-age=0, s-maxage=30, stale-while-revalidate=120');
+      res.status(200).json(response);
+    } catch (error) {
+      upstreamUnavailable(res, 'upstream_unavailable', error instanceof Error ? error.message : 'Unknown error');
+    }
+  });
+
    app.get('/api/v1/addresses/:address/transactions', async (req: Request, res: Response) => {
      try {
        const address = req.params.address;
@@ -823,6 +868,7 @@ export function registerRoutes(app: Express, env: Env) {
        const toTimestamp = toInt(req.query.toTimestamp) ?? undefined;
        const excludeCoinbase = toBool(req.query.excludeCoinbase);
        const includeIo = req.query.includeIo == null ? true : toBool(req.query.includeIo);
+       const skipTotals = toBool(req.query.skipTotals);
 
        // Always use getAddressTransactions for correct satoshi values
        const response = await getAddressTransactions(env, address, {
@@ -837,6 +883,7 @@ export function registerRoutes(app: Express, env: Env) {
          toTimestamp,
          excludeCoinbase,
          includeIo,
+         skipTotals,
        });
 
        res.status(200).json(response);

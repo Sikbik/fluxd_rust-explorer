@@ -925,6 +925,39 @@ Returns the number of unique transaction ids for one or more transparent address
   - Height range filtering is only applied if both `start` and `end` are provided.
 - Result: number (count of unique txids).
 
+### getaddressneighbors
+
+Returns the top neighbor addresses for a transparent address based on an address-to-address
+aggregation index (used by the explorer constellation / bubble map).
+
+- Params: `{"addresses":["taddr"], "limit": n}`
+  - Exactly one address is supported.
+  - `limit` defaults to `50` (clamped `1..=200`).
+- Result: `{ "address": "taddr", "generation": <u16>, "neighbors": [...] }`
+
+Each neighbor row includes:
+`address`, `txCount`, `inboundTxCount`, `outboundTxCount`,
+`totalValueSat`, `inboundValueSat`, `outboundValueSat` (value fields are decimal strings).
+
+Notes:
+- Requires the address-neighbor index to be built and active (see `startaddressneighborsreindex`).
+- Only standard transparent address types are supported (P2PKH/P2SH).
+
+### getaddressneighborsstatus
+
+Returns status metadata for the address-neighbor index.
+
+- Params: none
+- Result: object including `tipHeight`, `activeGeneration`, `activeHeight`, `buildState`, `buildHeight`, `buildStartedAt`, `buildError`.
+
+### startaddressneighborsreindex
+
+Starts a background rebuild of the address-neighbor index (skipping coinbase transactions).
+
+- Params: optional object `{"startHeight": n, "endHeight": n}`
+  - Defaults to `startHeight=1`, `endHeight=best_tip_height`.
+- Result: `{ "ok": true, "buildGeneration": n, "startHeight": n, "endHeight": n, "tipHash": "..." }`
+
 ### getnetworkhashps / getnetworksolps / getlocalsolps
 
 - `getnetworksolps` and `getnetworkhashps` return a chainwork/time-based estimate, modeled after the legacy C++ daemon.

@@ -132,6 +132,14 @@ static RICHLIST_CACHE: std::sync::OnceLock<std::sync::Mutex<Option<RichListCache
 static RICHLIST_REFRESH_IN_FLIGHT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 const RICHLIST_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(2 * 60);
 
+static ADDR_NEIGHBORS_REINDEX_IN_FLIGHT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+static ADDR_NEIGHBORS_CATCHUP_IN_FLIGHT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+const ADDR_NEIGHBORS_CATCHUP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+const ADDR_NEIGHBORS_CATCHUP_MAX_BLOCKS_PER_RUN: u32 = 750;
+
 fn richlist_cache() -> &'static std::sync::Mutex<Option<RichListCache>> {
     RICHLIST_CACHE.get_or_init(|| std::sync::Mutex::new(None))
 }
@@ -274,6 +282,9 @@ use zcash_protocol::consensus::{BlockHeight, NetworkType, NetworkUpgrade, Parame
 use zcash_protocol::memo::MemoBytes;
 use zcash_protocol::value::Zatoshis;
 
+use fluxd_chainstate::address_neighbors::{
+    address_id_from_script_pubkey, AddressId, AddressNeighborBuildState, AddressNeighborStats,
+};
 use fluxd_chainstate::index::HeaderEntry;
 use fluxd_chainstate::state::{ChainState, ChainStateError};
 use fluxd_chainstate::validation::ValidationFlags;
@@ -309,6 +320,7 @@ use fluxd_primitives::{
     address_to_script_pubkey, script_pubkey_to_address, secret_key_to_wif, wif_to_secret_key,
     AddressError,
 };
+use fluxd_storage::WriteBatch;
 use fluxd_script::interpreter::{verify_script, STANDARD_SCRIPT_VERIFY_FLAGS};
 use fluxd_script::message::{recover_signed_message_pubkey, signed_message_hash};
 use fluxd_script::sighash::{
@@ -467,10 +479,14 @@ const RPC_METHODS: &[&str] = &[
     "getspentinfo",
     "getaddressutxos",
     "getaddressbalance",
+    "getaddressutxobalances",
     "getaddressdeltas",
     "getaddresstxids",
     "getaddresspagecursor",
     "getaddressmempool",
+    "getaddressneighbors",
+    "getaddressneighborsstatus",
+    "startaddressneighborsreindex",
     "getmininginfo",
     "getblocktemplate",
     "submitblock",
@@ -1744,11 +1760,17 @@ fn dispatch_method<S: fluxd_storage::KeyValueStore + 'static>(
         "getspentinfo" => rpc_getspentinfo(chainstate, params),
         "getaddressutxos" => rpc_getaddressutxos(chainstate, params, chain_params),
         "getaddressbalance" => rpc_getaddressbalance(chainstate, params, chain_params),
+        "getaddressutxobalances" => rpc_getaddressutxobalances(chainstate, params, chain_params),
         "getaddressdeltas" => rpc_getaddressdeltas(chainstate, params, chain_params),
         "getaddresstxids" => rpc_getaddresstxids(chainstate, params, chain_params),
         "getaddresstxidscount" => rpc_getaddresstxidscount(chainstate, params, chain_params),
         "getaddresspagecursor" => rpc_getaddresspagecursor(chainstate, params, chain_params),
         "getaddressmempool" => rpc_getaddressmempool(chainstate, mempool, params, chain_params),
+        "getaddressneighbors" => rpc_getaddressneighbors(chainstate, params, chain_params),
+        "getaddressneighborsstatus" => rpc_getaddressneighborsstatus(chainstate, params),
+        "startaddressneighborsreindex" => {
+            rpc_startaddressneighborsreindex(Arc::clone(&ctx.chainstate), params)
+        }
         "getmininginfo" => {
             rpc_getmininginfo(chainstate, mempool, params, chain_params, header_metrics)
         }
@@ -12550,15 +12572,7 @@ fn rpc_getblockdeltas<S: fluxd_storage::KeyValueStore>(
     let mut deltas = Vec::with_capacity(block.transactions.len());
     let mut tx_cache: HashMap<Hash256, Transaction> = HashMap::new();
 
-    for (tx_index, tx) in block.transactions.iter().enumerate() {
-        let txid = tx.txid().map_err(map_internal)?;
-
-        if let Some(filter_txids) = filter_txids.as_ref() {
-            if !filter_txids.contains(&txid) {
-                continue;
-            }
-        }
-
+    let mut visit_tx = |tx_index: usize, tx: &fluxd_primitives::transaction::Transaction, txid: Hash256| -> Result<(), RpcError> {
         let mut entry_obj = serde_json::Map::new();
         entry_obj.insert("txid".to_string(), Value::String(hash256_to_hex(&txid)));
         entry_obj.insert("index".to_string(), Value::Number((tx_index as i64).into()));
@@ -12683,6 +12697,30 @@ fn rpc_getblockdeltas<S: fluxd_storage::KeyValueStore>(
         }
         entry_obj.insert("outputs".to_string(), Value::Array(outputs));
         deltas.push(Value::Object(entry_obj));
+        Ok(())
+    };
+
+    if let Some(filter_txids) = filter_txids.as_ref() {
+        let mut remaining = filter_txids.len();
+        for (tx_index, tx) in block.transactions.iter().enumerate() {
+            let txid = tx.txid().map_err(map_internal)?;
+
+            if !filter_txids.contains(&txid) {
+                continue;
+            }
+
+            visit_tx(tx_index, tx, txid)?;
+
+            remaining = remaining.saturating_sub(1);
+            if remaining == 0 {
+                break;
+            }
+        }
+    } else {
+        for (tx_index, tx) in block.transactions.iter().enumerate() {
+            let txid = tx.txid().map_err(map_internal)?;
+            visit_tx(tx_index, tx, txid)?;
+        }
     }
 
     let confirmations = best_height - entry.height + 1;
@@ -12835,6 +12873,76 @@ fn rpc_getaddressutxos<S: fluxd_storage::KeyValueStore>(
     }))
 }
 
+fn rpc_getaddressutxobalances<S: fluxd_storage::KeyValueStore>(
+    chainstate: &ChainState<S>,
+    params: Vec<Value>,
+    chain_params: &ChainParams,
+) -> Result<Value, RpcError> {
+    if params.len() != 1 {
+        return Err(RpcError::new(
+            RPC_INVALID_PARAMETER,
+            "getaddressutxobalances expects 1 parameter",
+        ));
+    }
+
+    let (addresses, opts) = parse_addresses_param(&params[0])?;
+    let address_scripts = decode_address_scripts(addresses, chain_params.network)?;
+
+    let max_utxos = opts
+        .and_then(|map| map.get("maxUtxos"))
+        .map(|value| parse_u32(value, "maxUtxos"))
+        .transpose()?
+        .unwrap_or(100_000)
+        .clamp(1, 500_000) as usize;
+
+    let best = chainstate.best_block().map_err(map_internal)?;
+    let (height, hash) = match best {
+        Some(tip) => (tip.height.max(0) as u32, tip.hash),
+        None => (0u32, [0u8; 32]),
+    };
+
+    let mut rows = Vec::with_capacity(address_scripts.len());
+
+    for (address, script_pubkey) in address_scripts {
+        let scan_limit = max_utxos.saturating_add(1);
+        let outpoints = chainstate
+            .address_outpoints_limited(&script_pubkey, scan_limit)
+            .map_err(map_internal)?;
+        let outpoints_len = outpoints.len();
+
+        let truncated = outpoints.len() > max_utxos;
+        let balance_sat = if truncated {
+            None
+        } else {
+            let mut sum: i128 = 0;
+            for outpoint in outpoints {
+                let entry = chainstate
+                    .utxo_entry(&outpoint)
+                    .map_err(map_internal)?
+                    .ok_or_else(|| RpcError::new(RPC_INTERNAL_ERROR, "missing utxo entry"))?;
+                sum += i128::from(entry.value);
+            }
+            Some(
+                i64::try_from(sum)
+                    .map_err(|_| RpcError::new(RPC_INTERNAL_ERROR, "address balance overflow"))?,
+            )
+        };
+
+        rows.push(json!({
+            "address": address,
+            "balanceSat": balance_sat.map(|value| value.to_string()),
+            "truncated": truncated,
+            "utxoCount": outpoints_len.min(max_utxos),
+        }));
+    }
+
+    Ok(json!({
+        "hash": hash256_to_hex(&hash),
+        "height": height,
+        "balances": rows,
+    }))
+}
+
 fn rpc_getaddressbalance<S: fluxd_storage::KeyValueStore>(
     chainstate: &ChainState<S>,
     params: Vec<Value>,
@@ -12922,6 +13030,82 @@ fn rpc_getaddressdeltas<S: fluxd_storage::KeyValueStore>(
     let exclude_coinbase = parse_exclude_coinbase_flag(opts)?;
     let range = parse_height_range(chainstate, opts)?;
     let address_scripts = decode_address_scripts(addresses, chain_params.network)?;
+
+    if address_scripts.len() == 1 {
+        let (address, script_pubkey) = address_scripts
+            .into_iter()
+            .next()
+            .expect("single address");
+
+        let mut deltas = Vec::new();
+
+        if let Some(script_hash) = fluxd_chainstate::address_index::script_hash(&script_pubkey) {
+            let mut visitor = |delta: fluxd_chainstate::address_deltas::AddressDeltaEntry| {
+                if exclude_coinbase && delta.tx_index == 0 {
+                    return Ok(());
+                }
+                deltas.push(json!({
+                    "address": address.clone(),
+                    "blockindex": delta.tx_index,
+                    "height": delta.height,
+                    "index": delta.index,
+                    "satoshis": delta.satoshis,
+                    "txid": hash256_to_hex(&delta.txid),
+                }));
+                Ok(())
+            };
+
+            if let Some((start, end)) = range {
+                chainstate
+                    .for_each_address_delta_range(&script_hash, start, end, &mut visitor)
+                    .map_err(map_internal)?;
+            } else {
+                chainstate
+                    .for_each_address_delta(&script_pubkey, &mut visitor)
+                    .map_err(map_internal)?;
+            }
+        }
+
+        let Some((start, end)) = range else {
+            return Ok(Value::Array(deltas));
+        };
+        if !include_chain_info {
+            return Ok(Value::Array(deltas));
+        }
+
+        let start_height = i32::try_from(start).map_err(|_| {
+            RpcError::new(
+                RPC_INVALID_ADDRESS_OR_KEY,
+                "Start or end is outside chain range",
+            )
+        })?;
+        let end_height = i32::try_from(end).map_err(|_| {
+            RpcError::new(
+                RPC_INVALID_ADDRESS_OR_KEY,
+                "Start or end is outside chain range",
+            )
+        })?;
+        let start_hash = chainstate
+            .height_hash(start_height)
+            .map_err(map_internal)?
+            .ok_or_else(|| RpcError::new(RPC_INVALID_ADDRESS_OR_KEY, "block not found"))?;
+        let end_hash = chainstate
+            .height_hash(end_height)
+            .map_err(map_internal)?
+            .ok_or_else(|| RpcError::new(RPC_INVALID_ADDRESS_OR_KEY, "block not found"))?;
+
+        return Ok(json!({
+            "deltas": deltas,
+            "start": {
+                "hash": hash256_to_hex(&start_hash),
+                "height": start,
+            },
+            "end": {
+                "hash": hash256_to_hex(&end_hash),
+                "height": end,
+            },
+        }));
+    }
 
     #[derive(Clone)]
     struct DeltaRow {
@@ -13043,6 +13227,41 @@ fn rpc_getaddresstxids<S: fluxd_storage::KeyValueStore>(
     let (addresses, opts) = parse_addresses_param(&params[0])?;
     let range = parse_height_range(chainstate, opts)?;
     let address_scripts = decode_address_scripts(addresses, chain_params.network)?;
+
+    if address_scripts.len() == 1 {
+        let (_address, script_pubkey) = address_scripts
+            .into_iter()
+            .next()
+            .expect("single address");
+
+        let Some(script_hash) = fluxd_chainstate::address_index::script_hash(&script_pubkey) else {
+            return Ok(Value::Number(0u64.into()));
+        };
+
+        let mut count: u64 = 0;
+        let mut last: Option<(u32, u32, Hash256)> = None;
+
+        let mut visitor = |delta: fluxd_chainstate::address_deltas::AddressDeltaEntry| {
+            let current = (delta.height, delta.tx_index, delta.txid);
+            if last.map_or(true, |prev| prev != current) {
+                count = count.saturating_add(1);
+                last = Some(current);
+            }
+            Ok(())
+        };
+
+        if let Some((start, end)) = range {
+            chainstate
+                .for_each_address_delta_range(&script_hash, start, end, &mut visitor)
+                .map_err(map_internal)?;
+        } else {
+            chainstate
+                .for_each_address_delta(&script_pubkey, &mut visitor)
+                .map_err(map_internal)?;
+        }
+
+        return Ok(Value::Number(count.into()));
+    }
 
     let mut txids = std::collections::BTreeSet::<(u32, Hash256)>::new();
     for (_address, script_pubkey) in address_scripts {
@@ -13320,6 +13539,693 @@ fn rpc_getaddressmempool<S: fluxd_storage::KeyValueStore>(
             })
             .collect(),
     ))
+}
+
+fn rpc_getaddressneighbors<S: fluxd_storage::KeyValueStore>(
+    chainstate: &ChainState<S>,
+    params: Vec<Value>,
+    chain_params: &ChainParams,
+) -> Result<Value, RpcError> {
+    if params.len() != 1 {
+        return Err(RpcError::new(
+            RPC_INVALID_PARAMETER,
+            "getaddressneighbors expects 1 parameter",
+        ));
+    }
+
+    let (addresses, opts) = parse_addresses_param(&params[0])?;
+    if addresses.len() != 1 {
+        return Err(RpcError::new(
+            RPC_INVALID_PARAMETER,
+            "getaddressneighbors expects exactly one address",
+        ));
+    }
+
+    let map = opts.ok_or_else(|| {
+        RpcError::new(
+            RPC_INVALID_PARAMETER,
+            "getaddressneighbors expects an object parameter",
+        )
+    })?;
+
+    let limit = map
+        .get("limit")
+        .map(|value| parse_u32(value, "limit"))
+        .transpose()?
+        .unwrap_or(50)
+        .clamp(1, 200) as usize;
+
+    let address = &addresses[0];
+    let script_pubkey = address_to_script_pubkey(address, chain_params.network).map_err(|_| {
+        RpcError::new(RPC_INVALID_ADDRESS_OR_KEY, "Invalid address")
+    })?;
+    let Some(address_id) = address_id_from_script_pubkey(&script_pubkey) else {
+        return Ok(json!({
+            "address": address,
+            "generation": null,
+            "neighbors": [],
+            "message": "unsupported address type",
+        }));
+    };
+
+    let index = chainstate.address_neighbor_index();
+    let Some(gen) = index.active_generation().map_err(map_internal)? else {
+        return Err(RpcError::new(
+            RPC_INTERNAL_ERROR,
+            "address neighbor index not available",
+        ));
+    };
+    if gen == 0 {
+        return Err(RpcError::new(
+            RPC_INTERNAL_ERROR,
+            "address neighbor index not available",
+        ));
+    }
+
+    let neighbors = index
+        .top_neighbors(gen, &address_id, limit)
+        .map_err(map_internal)?;
+
+    let rows: Vec<Value> = neighbors
+        .into_iter()
+        .filter_map(|(neighbor, stats)| {
+            let addr = spent_details_address(neighbor.address_type as u32, &neighbor.address_hash, chain_params.network)?;
+            let inbound_tx_count = stats.inbound_tx_count;
+            let outbound_tx_count = stats.outbound_tx_count;
+            let inbound_value_sat = stats.inbound_value_sat;
+            let outbound_value_sat = stats.outbound_value_sat;
+            let total_tx_count = stats.total_tx_count();
+            let total_value_sat = stats.total_value_sat();
+
+            Some(json!({
+                "address": addr,
+                "txCount": total_tx_count,
+                "inboundTxCount": inbound_tx_count,
+                "outboundTxCount": outbound_tx_count,
+                "totalValueSat": total_value_sat.to_string(),
+                "inboundValueSat": inbound_value_sat.to_string(),
+                "outboundValueSat": outbound_value_sat.to_string(),
+            }))
+        })
+        .collect();
+
+    Ok(json!({
+        "address": address,
+        "generation": gen,
+        "neighbors": rows,
+    }))
+}
+
+fn rpc_getaddressneighborsstatus<S: fluxd_storage::KeyValueStore>(
+    chainstate: &ChainState<S>,
+    params: Vec<Value>,
+) -> Result<Value, RpcError> {
+    ensure_no_params(&params)?;
+
+    let best = chainstate.best_block().map_err(map_internal)?;
+    let (tip_height, tip_hash) = match best {
+        Some(tip) => (tip.height.max(0) as u32, tip.hash),
+        None => (0u32, [0u8; 32]),
+    };
+
+    let index = chainstate.address_neighbor_index();
+    let active_generation = index.active_generation().map_err(map_internal)?;
+    let active_height = index.active_height().map_err(map_internal)?;
+    let active_tip_hash = index.active_tip_hash().map_err(map_internal)?;
+
+    let build_state = index.build_state().map_err(map_internal)?;
+    let build_generation = index.build_generation().map_err(map_internal)?;
+    let build_height = index.build_height().map_err(map_internal)?;
+    let build_tip_hash = index.build_tip_hash().map_err(map_internal)?;
+    let build_started_at = index.build_started_at().map_err(map_internal)?;
+    let build_error = index.build_error().map_err(map_internal)?;
+
+    Ok(json!({
+        "tipHeight": tip_height,
+        "tipHash": hash256_to_hex(&tip_hash),
+        "activeGeneration": active_generation,
+        "activeHeight": active_height,
+        "activeTipHash": active_tip_hash.map(|hash| hash256_to_hex(&hash)),
+        "buildState": build_state as u8,
+        "buildGeneration": build_generation,
+        "buildHeight": build_height,
+        "buildTipHash": build_tip_hash.map(|hash| hash256_to_hex(&hash)),
+        "buildStartedAt": build_started_at,
+        "buildError": build_error,
+    }))
+}
+
+fn rpc_startaddressneighborsreindex<S: fluxd_storage::KeyValueStore + 'static>(
+    chainstate: Arc<ChainState<S>>,
+    params: Vec<Value>,
+) -> Result<Value, RpcError> {
+    if params.len() > 1 {
+        return Err(RpcError::new(
+            RPC_INVALID_PARAMETER,
+            "startaddressneighborsreindex expects 0 or 1 parameter",
+        ));
+    }
+
+    if !ADDR_NEIGHBORS_REINDEX_IN_FLIGHT
+        .compare_exchange(
+            false,
+            true,
+            std::sync::atomic::Ordering::SeqCst,
+            std::sync::atomic::Ordering::SeqCst,
+        )
+        .is_ok()
+    {
+        return Err(RpcError::new(
+            RPC_MISC_ERROR,
+            "address neighbor reindex already running",
+        ));
+    }
+
+    let outcome: Result<Value, RpcError> = (|| {
+        let (start_height, end_height) = if let Some(Value::Object(map)) = params.get(0) {
+            let start = map
+                .get("startHeight")
+                .map(|value| parse_u32(value, "startHeight"))
+                .transpose()?
+                .unwrap_or(1);
+            let end = map
+                .get("endHeight")
+                .map(|value| parse_u32(value, "endHeight"))
+                .transpose()?
+                .unwrap_or(0);
+            (start.max(1), end)
+        } else {
+            (1u32, 0u32)
+        };
+
+        let best = chainstate.best_block().map_err(map_internal)?;
+        let tip_height = best.map(|tip| tip.height.max(0) as u32).unwrap_or(0);
+        let resolved_end_height = if end_height == 0 { tip_height } else { end_height };
+        if resolved_end_height == 0 || resolved_end_height > tip_height {
+            return Err(RpcError::new(
+                RPC_INVALID_PARAMETER,
+                "endHeight outside chain range",
+            ));
+        }
+        if start_height > resolved_end_height {
+            return Err(RpcError::new(
+                RPC_INVALID_PARAMETER,
+                "startHeight must be <= endHeight",
+            ));
+        }
+
+        let tip_hash = chainstate
+            .height_hash(i32::try_from(resolved_end_height).unwrap_or(i32::MAX))
+            .map_err(map_internal)?
+            .ok_or_else(|| RpcError::new(RPC_INTERNAL_ERROR, "missing block hash for endHeight"))?;
+
+        let index = chainstate.address_neighbor_index();
+        let active_gen = index.active_generation().map_err(map_internal)?.unwrap_or(0);
+        let previous_build_gen = index.build_generation().map_err(map_internal)?.unwrap_or(0);
+        let build_gen = active_gen.max(previous_build_gen).wrapping_add(1).max(1);
+
+        let mut batch = WriteBatch::new();
+        index.set_build_generation(&mut batch, build_gen);
+        index.set_build_state(&mut batch, AddressNeighborBuildState::Running);
+        index.set_build_started_at(&mut batch, current_unix_seconds_u64());
+        index.set_build_tip_hash(&mut batch, &tip_hash);
+        index.set_build_height(&mut batch, start_height.saturating_sub(1));
+        index.set_build_error(&mut batch, "");
+        chainstate.commit_batch(batch).map_err(map_internal)?;
+
+        let chainstate_task = Arc::clone(&chainstate);
+        tokio::task::spawn_blocking(move || {
+            let index = chainstate_task.address_neighbor_index();
+            let initial_result = reindex_address_neighbors_range(
+                chainstate_task.as_ref(),
+                &index,
+                build_gen,
+                start_height,
+                resolved_end_height,
+                true,
+            );
+
+            let mut final_batch = WriteBatch::new();
+            match initial_result {
+                Ok(()) => {
+                    let mut final_height = resolved_end_height;
+                    let mut final_tip_hash = tip_hash;
+                    if let Ok(best) = chainstate_task.best_block() {
+                        if let Some(tip) = best {
+                            let latest_height = tip.height.max(0) as u32;
+                            if latest_height > resolved_end_height {
+                                match reindex_address_neighbors_range(
+                                    chainstate_task.as_ref(),
+                                    &index,
+                                    build_gen,
+                                    resolved_end_height.saturating_add(1),
+                                    latest_height,
+                                    true,
+                                ) {
+                                    Ok(()) => {
+                                        final_height = latest_height;
+                                        final_tip_hash = tip.hash;
+                                        index.set_build_tip_hash(&mut final_batch, &final_tip_hash);
+                                    }
+                                    Err(message) => {
+                                        index.set_build_state(&mut final_batch, AddressNeighborBuildState::Error);
+                                        index.set_build_error(&mut final_batch, &message);
+                                        if let Err(err) = chainstate_task.commit_batch(final_batch) {
+                                            log_warn!("address neighbor reindex: failed to write final status: {err}");
+                                        }
+                                        ADDR_NEIGHBORS_REINDEX_IN_FLIGHT.store(false, std::sync::atomic::Ordering::SeqCst);
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    index.set_build_state(&mut final_batch, AddressNeighborBuildState::Complete);
+                    index.set_build_height(&mut final_batch, final_height);
+                    index.set_build_error(&mut final_batch, "");
+                    index.set_active_index(
+                        &mut final_batch,
+                        build_gen,
+                        final_height,
+                        &final_tip_hash,
+                    );
+                }
+                Err(message) => {
+                    index.set_build_state(&mut final_batch, AddressNeighborBuildState::Error);
+                    index.set_build_error(&mut final_batch, &message);
+                }
+            }
+
+            if let Err(err) = chainstate_task.commit_batch(final_batch) {
+                log_warn!("address neighbor reindex: failed to write final status: {err}");
+            }
+
+            ADDR_NEIGHBORS_REINDEX_IN_FLIGHT.store(false, std::sync::atomic::Ordering::SeqCst);
+        });
+
+        Ok(json!({
+            "ok": true,
+            "buildGeneration": build_gen,
+            "startHeight": start_height,
+            "endHeight": resolved_end_height,
+            "tipHash": hash256_to_hex(&tip_hash),
+        }))
+    })();
+
+    if outcome.is_err() {
+        ADDR_NEIGHBORS_REINDEX_IN_FLIGHT.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    outcome
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+struct AddressNeighborPair {
+    a: AddressId,
+    b: AddressId,
+}
+
+fn reindex_address_neighbors_range<S: fluxd_storage::KeyValueStore>(
+    chainstate: &ChainState<S>,
+    index: &fluxd_chainstate::address_neighbors::AddressNeighborIndex<Arc<S>>,
+    gen: u16,
+    start_height: u32,
+    end_height: u32,
+    update_build_height: bool,
+) -> Result<(), String> {
+    const MAX_UNIQUE_INPUT_ADDRS: usize = 64;
+    const MAX_UNIQUE_OUTPUT_ADDRS: usize = 128;
+    const MAX_DELTA_ENTRIES: usize = 50_000;
+    const MAX_BLOCKS_PER_BATCH: u32 = 25;
+
+    let mut deltas: HashMap<AddressNeighborPair, AddressNeighborStats> = HashMap::new();
+    let mut blocks_in_batch: u32 = 0;
+    let mut current_height = start_height;
+
+    while current_height <= end_height {
+        let height_i32 = i32::try_from(current_height).unwrap_or(i32::MAX);
+        let Some(hash) = chainstate.height_hash(height_i32).map_err(|err| err.to_string())? else {
+            break;
+        };
+        let location = match chainstate.block_location(&hash).map_err(|err| err.to_string())? {
+            Some(location) => location,
+            None => {
+                return Err(format!(
+                    "missing block location at height {}",
+                    current_height
+                ));
+            }
+        };
+        let bytes = chainstate.read_block(location).map_err(|err| err.to_string())?;
+        let block = Block::consensus_decode(&bytes).map_err(|err| err.to_string())?;
+
+        for (tx_index, tx) in block.transactions.iter().enumerate() {
+            if tx_index == 0 {
+                continue;
+            }
+
+            let mut input_totals: HashMap<AddressId, u64> = HashMap::new();
+            for input in &tx.vin {
+                let spent = match chainstate.spent_info(&input.prevout) {
+                    Ok(value) => value,
+                    Err(_) => None,
+                };
+                let Some(spent) = spent else {
+                    continue;
+                };
+                let Some(details) = spent.details else {
+                    continue;
+                };
+                if details.satoshis <= 0 {
+                    continue;
+                }
+                let Some(addr) = AddressId::from_type_hash(details.address_type, details.address_hash) else {
+                    continue;
+                };
+                let value_sat = details.satoshis as u64;
+                input_totals
+                    .entry(addr)
+                    .and_modify(|value| *value = value.saturating_add(value_sat))
+                    .or_insert(value_sat);
+            }
+
+            if input_totals.is_empty() {
+                continue;
+            }
+
+            let mut output_totals: HashMap<AddressId, u64> = HashMap::new();
+            for output in &tx.vout {
+                if output.value <= 0 {
+                    continue;
+                }
+                let Some(addr) = address_id_from_script_pubkey(&output.script_pubkey) else {
+                    continue;
+                };
+                let value_sat = output.value as u64;
+                output_totals
+                    .entry(addr)
+                    .and_modify(|value| *value = value.saturating_add(value_sat))
+                    .or_insert(value_sat);
+            }
+
+            if output_totals.is_empty() {
+                continue;
+            }
+
+            let mut inputs: Vec<(AddressId, u64)> = input_totals.into_iter().collect();
+            let mut outputs: Vec<(AddressId, u64)> = output_totals.into_iter().collect();
+            inputs.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+            outputs.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+
+            if inputs.len() > MAX_UNIQUE_INPUT_ADDRS {
+                inputs.truncate(MAX_UNIQUE_INPUT_ADDRS);
+            }
+            if outputs.len() > MAX_UNIQUE_OUTPUT_ADDRS {
+                outputs.truncate(MAX_UNIQUE_OUTPUT_ADDRS);
+            }
+
+            let total_in: u64 = inputs.iter().map(|(_, value)| *value).sum();
+            if total_in == 0 {
+                continue;
+            }
+
+            let mut pair_flows: HashMap<AddressNeighborPair, u64> = HashMap::new();
+            for (out_addr, out_value) in &outputs {
+                let mut used: u64 = 0;
+                let mut base: Vec<(AddressId, u64)> = Vec::with_capacity(inputs.len());
+                for (in_addr, in_value) in &inputs {
+                    let flow = ((u128::from(*out_value) * u128::from(*in_value))
+                        / u128::from(total_in)) as u64;
+                    used = used.saturating_add(flow);
+                    base.push((*in_addr, flow));
+                }
+
+                let mut remainder = out_value.saturating_sub(used);
+                for idx in 0..base.len() {
+                    if remainder == 0 {
+                        break;
+                    }
+                    base[idx].1 = base[idx].1.saturating_add(1);
+                    remainder -= 1;
+                }
+
+                for (in_addr, flow) in base {
+                    if flow == 0 {
+                        continue;
+                    }
+                    pair_flows
+                        .entry(AddressNeighborPair { a: in_addr, b: *out_addr })
+                        .and_modify(|value| *value = value.saturating_add(flow))
+                        .or_insert(flow);
+                }
+            }
+
+            for (pair, flow_sat) in pair_flows {
+                if pair.a == pair.b {
+                    continue;
+                }
+
+                deltas
+                    .entry(pair)
+                    .and_modify(|stats| {
+                        stats.outbound_tx_count = stats.outbound_tx_count.saturating_add(1);
+                        stats.outbound_value_sat = stats.outbound_value_sat.saturating_add(flow_sat);
+                    })
+                    .or_insert(AddressNeighborStats {
+                        outbound_tx_count: 1,
+                        outbound_value_sat: flow_sat,
+                        ..Default::default()
+                    });
+
+                deltas
+                    .entry(AddressNeighborPair { a: pair.b, b: pair.a })
+                    .and_modify(|stats| {
+                        stats.inbound_tx_count = stats.inbound_tx_count.saturating_add(1);
+                        stats.inbound_value_sat = stats.inbound_value_sat.saturating_add(flow_sat);
+                    })
+                    .or_insert(AddressNeighborStats {
+                        inbound_tx_count: 1,
+                        inbound_value_sat: flow_sat,
+                        ..Default::default()
+                    });
+            }
+        }
+
+        blocks_in_batch += 1;
+
+        if deltas.len() >= MAX_DELTA_ENTRIES || blocks_in_batch >= MAX_BLOCKS_PER_BATCH {
+            flush_address_neighbor_deltas(
+                chainstate,
+                index,
+                gen,
+                &mut deltas,
+                current_height,
+                update_build_height,
+            )?;
+            blocks_in_batch = 0;
+        }
+
+        if current_height % 500 == 0 {
+            fluxd_log::log_info!(
+                "address neighbor reindex gen {}: height {} / {} (pending pairs {})",
+                gen,
+                current_height,
+                end_height,
+                deltas.len()
+            );
+        }
+
+        current_height += 1;
+    }
+
+    if !deltas.is_empty() || blocks_in_batch > 0 {
+        let last_height = current_height.saturating_sub(1).min(end_height);
+        flush_address_neighbor_deltas(
+            chainstate,
+            index,
+            gen,
+            &mut deltas,
+            last_height,
+            update_build_height,
+        )?;
+    }
+
+    Ok(())
+}
+
+fn flush_address_neighbor_deltas<S: fluxd_storage::KeyValueStore>(
+    chainstate: &ChainState<S>,
+    index: &fluxd_chainstate::address_neighbors::AddressNeighborIndex<Arc<S>>,
+    gen: u16,
+    deltas: &mut HashMap<AddressNeighborPair, AddressNeighborStats>,
+    height: u32,
+    update_build_height: bool,
+) -> Result<(), String> {
+    if deltas.is_empty() {
+        let mut batch = WriteBatch::new();
+        if update_build_height {
+            index.set_build_height(&mut batch, height);
+        }
+        chainstate.commit_batch(batch).map_err(|err| err.to_string())?;
+        return Ok(());
+    }
+
+    let mut batch = WriteBatch::new();
+    for (pair, delta) in deltas.drain() {
+        index
+            .upsert_delta(&mut batch, gen, &pair.a, &pair.b, delta)
+            .map_err(|err| err.to_string())?;
+    }
+    if update_build_height {
+        index.set_build_height(&mut batch, height);
+    }
+    chainstate.commit_batch(batch).map_err(|err| err.to_string())?;
+    Ok(())
+}
+
+pub(crate) fn spawn_address_neighbors_catchup_task<S: fluxd_storage::KeyValueStore + 'static>(
+    chainstate: Arc<ChainState<S>>,
+    mut shutdown_rx: watch::Receiver<bool>,
+) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(ADDR_NEIGHBORS_CATCHUP_INTERVAL);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    if *shutdown_rx.borrow() {
+                        break;
+                    }
+                    schedule_address_neighbors_catchup(Arc::clone(&chainstate));
+                }
+                changed = shutdown_rx.changed() => {
+                    if changed.is_ok() && *shutdown_rx.borrow() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+}
+
+fn schedule_address_neighbors_catchup<S: fluxd_storage::KeyValueStore + 'static>(
+    chainstate: Arc<ChainState<S>>,
+) {
+    use std::sync::atomic::Ordering;
+
+    if ADDR_NEIGHBORS_REINDEX_IN_FLIGHT.load(Ordering::SeqCst) {
+        return;
+    }
+    if ADDR_NEIGHBORS_CATCHUP_IN_FLIGHT.load(Ordering::SeqCst) {
+        return;
+    }
+
+    let index = chainstate.address_neighbor_index();
+    let build_state = match index.build_state() {
+        Ok(state) => state,
+        Err(_) => return,
+    };
+    if build_state == AddressNeighborBuildState::Running {
+        return;
+    }
+
+    let gen = match index.active_generation() {
+        Ok(Some(gen)) if gen > 0 => gen,
+        _ => return,
+    };
+    let active_height = match index.active_height() {
+        Ok(Some(height)) => height,
+        _ => return,
+    };
+
+    let best = match chainstate.best_block() {
+        Ok(Some(tip)) => tip,
+        _ => return,
+    };
+    let tip_height = best.height.max(0) as u32;
+
+    let reorg_depth = fluxd_consensus::constants::max_reorg_depth(best.height.max(0) as i64)
+        .max(0) as u32;
+    if tip_height <= reorg_depth {
+        return;
+    }
+
+    let safe_height = tip_height.saturating_sub(reorg_depth);
+    if active_height >= safe_height {
+        return;
+    }
+
+    let start_height = active_height.saturating_add(1);
+    let mut end_height = safe_height;
+    if safe_height.saturating_sub(start_height) >= ADDR_NEIGHBORS_CATCHUP_MAX_BLOCKS_PER_RUN {
+        end_height = start_height
+            .saturating_add(ADDR_NEIGHBORS_CATCHUP_MAX_BLOCKS_PER_RUN)
+            .saturating_sub(1)
+            .min(safe_height);
+    }
+    if end_height < start_height {
+        return;
+    }
+
+    let height_i32 = match i32::try_from(end_height) {
+        Ok(value) => value,
+        Err(_) => return,
+    };
+    let end_hash = match chainstate.height_hash(height_i32) {
+        Ok(Some(hash)) => hash,
+        _ => return,
+    };
+
+    if !ADDR_NEIGHBORS_CATCHUP_IN_FLIGHT
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+    {
+        return;
+    }
+
+    tokio::task::spawn_blocking(move || {
+        let index = chainstate.address_neighbor_index();
+        let outcome = reindex_address_neighbors_range(
+            chainstate.as_ref(),
+            &index,
+            gen,
+            start_height,
+            end_height,
+            false,
+        );
+
+        match outcome {
+            Ok(()) => {
+                let mut batch = WriteBatch::new();
+                index.set_active_index(&mut batch, gen, end_height, &end_hash);
+                if let Err(err) = chainstate.commit_batch(batch) {
+                    log_warn!("address neighbor catchup: failed to commit active height: {err}");
+                } else {
+                    log_info!(
+                        "address neighbor catchup: gen {} indexed {}..{} (tip={} depth={})",
+                        gen,
+                        start_height,
+                        end_height,
+                        tip_height,
+                        reorg_depth
+                    );
+                }
+            }
+            Err(message) => {
+                log_warn!(
+                    "address neighbor catchup: gen {} failed at {}..{}: {}",
+                    gen,
+                    start_height,
+                    end_height,
+                    message
+                );
+            }
+        }
+
+        ADDR_NEIGHBORS_CATCHUP_IN_FLIGHT.store(false, Ordering::SeqCst);
+    });
 }
 
 fn rpc_getblocktemplate<S: fluxd_storage::KeyValueStore>(

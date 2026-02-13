@@ -191,3 +191,6 @@ This file tracks parity targets with the C++ `fluxd` RPC surface. Statuses:
 These methods are not part of the legacy C++ `fluxd` RPC surface, but are useful for ops/debugging.
 
 - getdbinfo - Implemented (disk usage breakdown + fjall telemetry)
+- getaddressneighbors - Implemented (top neighbor addresses for a given transparent address; backed by the address-neighbor index; P2PKH/P2SH only)
+- getaddressneighborsstatus - Implemented (reports address-neighbor index build status and active generation metadata)
+- startaddressneighborsreindex - Implemented (builds the address-neighbor index in a background task; skips coinbase transactions)

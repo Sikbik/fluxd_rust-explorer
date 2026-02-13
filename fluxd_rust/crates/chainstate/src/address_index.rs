@@ -104,6 +104,29 @@ impl<S: KeyValueStore> AddressIndex<S> {
         }
         Ok(outpoints)
     }
+
+    pub fn scan_limited(
+        &self,
+        script_pubkey: &[u8],
+        limit: usize,
+    ) -> Result<Vec<OutPoint>, StoreError> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let Some(prefix) = address_prefix(script_pubkey) else {
+            return Ok(Vec::new());
+        };
+        let entries = self
+            .store
+            .scan_prefix_limited(Column::AddressOutpoint, &prefix, limit)?;
+        let mut outpoints = Vec::with_capacity(entries.len());
+        for (key, _) in entries {
+            if let Some(outpoint) = outpoint_from_key(&key) {
+                outpoints.push(outpoint);
+            }
+        }
+        Ok(outpoints)
+    }
 }
 
 fn normalized_p2pk_hash(script_pubkey: &[u8]) -> Option<Hash256> {

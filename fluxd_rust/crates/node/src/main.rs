@@ -890,6 +890,18 @@ impl KeyValueStore for Store {
         }
     }
 
+    fn scan_prefix_limited(
+        &self,
+        column: fluxd_storage::Column,
+        prefix: &[u8],
+        limit: usize,
+    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, StoreError> {
+        match self {
+            Store::Memory(store) => store.scan_prefix_limited(column, prefix, limit),
+            Store::Fjall(store) => store.scan_prefix_limited(column, prefix, limit),
+        }
+    }
+
     fn for_each_prefix<'a>(
         &self,
         column: fluxd_storage::Column,
@@ -1655,6 +1667,9 @@ async fn run_with_config(start_time: Instant, config: Config) -> Result<(), Stri
             });
         });
     }
+
+    rpc::spawn_address_neighbors_catchup_task(Arc::clone(&chainstate), shutdown_rx.clone());
+
     let verify_settings = resolve_verify_settings(
         &config,
         getdata_batch,

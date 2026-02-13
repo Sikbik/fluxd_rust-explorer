@@ -4053,11 +4053,23 @@ impl<S: KeyValueStore> ChainState<S> {
             .map_err(ChainStateError::from)
     }
 
+    pub fn address_neighbor_index(&self) -> crate::address_neighbors::AddressNeighborIndex<Arc<S>> {
+        crate::address_neighbors::AddressNeighborIndex::new(Arc::clone(&self.store))
+    }
+
     pub fn address_outpoints(
         &self,
         script_pubkey: &[u8],
     ) -> Result<Vec<OutPoint>, ChainStateError> {
         Ok(self.address_index.scan(script_pubkey)?)
+    }
+
+    pub fn address_outpoints_limited(
+        &self,
+        script_pubkey: &[u8],
+        limit: usize,
+    ) -> Result<Vec<OutPoint>, ChainStateError> {
+        Ok(self.address_index.scan_limited(script_pubkey, limit)?)
     }
 
     pub fn address_deltas(

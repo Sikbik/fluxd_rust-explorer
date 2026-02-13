@@ -29,6 +29,20 @@ export interface AddressConstellationStats {
   firstHopCount: number;
   secondHopCount: number;
   edgeCount: number;
+  scanMode?: "fast" | "deep";
+  rootFetchMs?: number;
+  buildMs?: number;
+  rootScanned?: number;
+  rootExcludedRewards?: number;
+  rootPagesFetched?: number;
+  rootFallbackTxs?: number;
+  hopScanned?: number;
+  hopExcludedRewards?: number;
+  hopPagesFetched?: number;
+  balanceRequested?: number;
+  balanceReturned?: number;
+  balancePopulated?: number;
+  balanceTruncated?: number;
 }
 
 export interface AddressConstellationData {

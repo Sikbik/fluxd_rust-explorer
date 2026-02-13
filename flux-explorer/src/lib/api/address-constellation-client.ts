@@ -3,13 +3,19 @@ import type { AddressConstellationData } from "@/types/address-constellation";
 const CONSTELLATION_REQUEST_TIMEOUT_MS = 30_000;
 
 export async function getAddressConstellation(
-  address: string
+  address: string,
+  options?: { mode?: "fast" | "deep" }
 ): Promise<AddressConstellationData> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), CONSTELLATION_REQUEST_TIMEOUT_MS);
   let response: Response;
+  const mode = options?.mode ?? "fast";
+  const url =
+    mode === "deep"
+      ? `/api/address-constellation/${address}?mode=deep`
+      : `/api/address-constellation/${address}`;
   try {
-    response = await fetch(`/api/address-constellation/${address}`, {
+    response = await fetch(url, {
       method: "GET",
       cache: "no-store",
       signal: controller.signal,

@@ -55,8 +55,8 @@ export function AddressDetail({ address }: AddressDetailProps) {
 
     queryClient
       .prefetchQuery({
-        queryKey: addressConstellationKeys.detail(normalizedAddress),
-        queryFn: () => getAddressConstellation(normalizedAddress),
+        queryKey: addressConstellationKeys.detail(normalizedAddress, "fast"),
+        queryFn: () => getAddressConstellation(normalizedAddress, { mode: "fast" }),
         staleTime: 20_000,
       })
       .catch(() => {

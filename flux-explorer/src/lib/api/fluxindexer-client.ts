@@ -16,6 +16,8 @@ import type {
   HomeSnapshot,
   AddressTransactionSummary,
   AddressTransactionsPage,
+  AddressNeighborsResponse,
+  AddressBalancesResponse,
 } from "@/types/flux-api";
 import {
   convertFluxIndexerTransaction,
@@ -816,6 +818,47 @@ export class FluxIndexerAPI {
     }
   }
 
+  static async getAddressBalances(
+    addresses: string[],
+    params?: { maxUtxos?: number }
+  ): Promise<AddressBalancesResponse> {
+    try {
+      const response = await api()
+        .post("api/v1/addresses/balances", {
+          json: {
+            addresses,
+            maxUtxos: params?.maxUtxos,
+          },
+        })
+        .json<AddressBalancesResponse>();
+      return response;
+    } catch (error) {
+      throw new FluxIndexerAPIError(
+        "Failed to fetch address balances",
+        getStatusCode(error),
+        error
+      );
+    }
+  }
+
+  static async getAddressNeighbors(address: string, limit: number = 50): Promise<AddressNeighborsResponse> {
+    try {
+      const capped = Math.max(1, Math.min(200, Math.trunc(limit)));
+      const response = await api()
+        .get(`api/v1/addresses/${address}/neighbors`, {
+          searchParams: { limit: capped.toString() },
+        })
+        .json<AddressNeighborsResponse>();
+      return response;
+    } catch (error) {
+      throw new FluxIndexerAPIError(
+        `Failed to fetch neighbors for ${address}`,
+        getStatusCode(error),
+        error
+      );
+    }
+  }
+
   /**
    * Fetch transactions for addresses with pagination and optional block height filtering
    *
@@ -841,6 +884,7 @@ export class FluxIndexerAPI {
       exportToken?: string;
       excludeCoinbase?: boolean;
       includeIo?: boolean;
+      skipTotals?: boolean;
     },
     requestOptions?: AddressTransactionsRequestOptions
   ): Promise<AddressTransactionsPage> {
@@ -890,6 +934,9 @@ export class FluxIndexerAPI {
       }
       if (params?.includeIo === false) {
         searchParams.includeIo = "0";
+      }
+      if (params?.skipTotals) {
+        searchParams.skipTotals = "1";
       }
 
       const requestConfig: Options = { searchParams };
@@ -986,6 +1033,7 @@ export class FluxIndexerAPI {
       exportToken?: string;
       excludeCoinbase?: boolean;
       includeIo?: boolean;
+      skipTotals?: boolean;
     },
     requestOptions?: AddressTransactionsRequestOptions
   ): Promise<AddressTransactionsPage> {
@@ -1007,6 +1055,7 @@ export class FluxIndexerAPI {
       exportToken?: string;
       excludeCoinbase?: boolean;
       includeIo?: boolean;
+      skipTotals?: boolean;
     }
   ): Promise<AddressTransactionsPage> {
     return this.fetchAddressTransactions(addresses, params, {

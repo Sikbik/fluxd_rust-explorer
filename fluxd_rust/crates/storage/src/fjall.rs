@@ -388,6 +388,21 @@ impl KeyValueStore for FjallStore {
         Ok(results)
     }
 
+    fn scan_prefix_limited(
+        &self,
+        column: Column,
+        prefix: &[u8],
+        limit: usize,
+    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, StoreError> {
+        let partition = self.partition(column)?;
+        let mut results = Vec::new();
+        for entry in partition.prefix(prefix).take(limit) {
+            let (key, value) = entry.map_err(map_err)?;
+            results.push((key.to_vec(), value.to_vec()));
+        }
+        Ok(results)
+    }
+
     fn for_each_prefix<'a>(
         &self,
         column: Column,

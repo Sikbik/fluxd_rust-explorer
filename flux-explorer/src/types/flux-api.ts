@@ -250,6 +250,35 @@ export interface AddressUTXO {
   confirmations: number;
 }
 
+export interface AddressNeighborEntry {
+  address: string;
+  txCount: number;
+  inboundTxCount: number;
+  outboundTxCount: number;
+  totalValueSat: string;
+  inboundValueSat: string;
+  outboundValueSat: string;
+}
+
+export interface AddressNeighborsResponse {
+  address: string;
+  generation: number | null;
+  neighbors: AddressNeighborEntry[];
+}
+
+export interface AddressBalanceEntry {
+  address: string;
+  balanceSat: string | null;
+  utxoCount: number;
+  truncated: boolean;
+}
+
+export interface AddressBalancesResponse {
+  hash: string;
+  height: number;
+  balances: AddressBalanceEntry[];
+}
+
 // ============================================================================
 // Network/Status Types
 // ============================================================================
