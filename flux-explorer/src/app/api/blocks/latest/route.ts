@@ -42,6 +42,7 @@ setInterval(() => {
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const limitParam = searchParams.get("limit");
+  const offsetParam = searchParams.get("offset");
 
   let limit = 10;
   if (limitParam) {
@@ -50,9 +51,16 @@ export async function GET(request: NextRequest) {
       limit = Math.max(1, Math.min(Math.floor(parsed), 50));
     }
   }
+  let offset = 0;
+  if (offsetParam) {
+    const parsed = Number(offsetParam);
+    if (Number.isFinite(parsed)) {
+      offset = Math.max(0, Math.floor(parsed));
+    }
+  }
 
   // Request coalescing: cache key based on limit parameter
-  const cacheKey = `latest-blocks:${limit}`;
+  const cacheKey = `latest-blocks:${limit}:${offset}`;
 
   // Check if there's already an inflight request for this limit
   const existingRequest = inflightRequests.get(cacheKey);
@@ -87,7 +95,7 @@ export async function GET(request: NextRequest) {
 
   // No inflight request, create a new one
   console.log(`[Latest Blocks] Starting new fetch for ${cacheKey}`);
-  const fetchPromise = FluxAPI.getLatestBlocks(limit);
+  const fetchPromise = FluxAPI.getLatestBlocks(limit, offset);
 
   // Store the promise so concurrent requests can share it
   inflightRequests.set(cacheKey, {

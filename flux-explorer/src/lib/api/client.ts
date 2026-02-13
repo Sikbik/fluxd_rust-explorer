@@ -93,8 +93,8 @@ export class FluxAPI {
    * @param limit - Number of blocks to fetch (default: 10)
    * @returns Array of block summaries
    */
-  static async getLatestBlocks(limit: number = 10): Promise<BlockSummary[]> {
-    return FluxIndexerAPI.getLatestBlocks(limit);
+  static async getLatestBlocks(limit: number = 10, offset: number = 0): Promise<BlockSummary[]> {
+    return FluxIndexerAPI.getLatestBlocks(limit, offset);
   }
 
   /**

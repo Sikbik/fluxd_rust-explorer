@@ -834,7 +834,8 @@ export async function getBlockByHeight(env: Env, height: number): Promise<FluxIn
 export async function getLatestBlocks(
   env: Env,
   limit: number,
-  tipHeightHint?: number
+  tipHeightHint?: number,
+  offset: number = 0
 ): Promise<{
   blocks: Array<{
     height: number;
@@ -850,8 +851,13 @@ export async function getLatestBlocks(
   const tipHeight = tipHeightHint ?? await fluxdGet<number>(env, 'getblockcount', { params: JSON.stringify([]) });
 
   const capped = Math.max(1, Math.min(Math.floor(limit), 50));
+  const safeOffset = Math.max(0, Math.floor(offset));
+  const startHeight = tipHeight - safeOffset;
+  if (startHeight < 0) {
+    return { blocks: [] };
+  }
   const heights = [] as number[];
-  for (let h = tipHeight; h >= 0 && heights.length < capped; h--) {
+  for (let h = startHeight; h >= 0 && heights.length < capped; h--) {
     heights.push(h);
   }
 

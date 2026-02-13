@@ -517,15 +517,20 @@ export class FluxIndexerAPI {
   /**
    * Fetch latest blocks with FluxNode aggregation when available.
    * Falls back to legacy per-block fetching if the optimized endpoint is missing.
-   */
-  static async getLatestBlocks(limit: number = 10): Promise<BlockSummary[]> {
+  */
+  static async getLatestBlocks(limit: number = 10, offset: number = 0): Promise<BlockSummary[]> {
+    const safeLimit = Math.max(1, Math.min(limit, 50));
+    const safeOffset = Math.max(0, Math.floor(offset));
     try {
       const response = await api().get("api/v1/blocks/latest", {
-        searchParams: { limit: Math.max(1, Math.min(limit, 50)).toString() },
+        searchParams: {
+          limit: safeLimit.toString(),
+          ...(safeOffset > 0 ? { offset: safeOffset.toString() } : {}),
+        },
       }).json<FluxIndexerLatestBlocksResponse>();
 
       if (!Array.isArray(response.blocks)) {
-        return this.fetchLatestBlocksLegacy(limit);
+        return this.fetchLatestBlocksLegacy(safeLimit, safeOffset);
       }
 
       return response.blocks.map((block) => {
@@ -567,7 +572,7 @@ export class FluxIndexerAPI {
     } catch (error) {
       const statusCode = getStatusCode(error);
       if (statusCode === 404) {
-        return this.fetchLatestBlocksLegacy(limit);
+        return this.fetchLatestBlocksLegacy(safeLimit, safeOffset);
       }
 
       throw new FluxIndexerAPIError(
@@ -582,20 +587,24 @@ export class FluxIndexerAPI {
    * Legacy latest blocks fetcher that walks heights individually.
    * Used only when the optimized API endpoint is unavailable.
    */
-  private static async fetchLatestBlocksLegacy(limit: number): Promise<BlockSummary[]> {
+  private static async fetchLatestBlocksLegacy(limit: number, offset: number = 0): Promise<BlockSummary[]> {
     const config = getApiConfig();
 
     // Get current height first
     const statusResponse = await api().get("api/v1/status").json<FluxIndexerApiResponse>();
     const currentHeight = statusResponse.indexer.currentHeight;
+    const anchorHeight = currentHeight - Math.max(0, Math.floor(offset));
+    if (anchorHeight < 0) {
+      return [];
+    }
 
     // Fetch blocks starting from current height
     const blocks: BlockSummary[] = [];
     const batchSize = Math.min(config.batchSize, 20); // Use dynamic batch size, cap at 20
 
     for (let i = 0; i < limit; i += batchSize) {
-      const startHeight = currentHeight - i;
-      const endHeight = Math.max(currentHeight - i - batchSize + 1, 0);
+      const startHeight = anchorHeight - i;
+      const endHeight = Math.max(anchorHeight - i - batchSize + 1, 0);
 
       // Fetch individual blocks
       const blockPromises = [];

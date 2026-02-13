@@ -1,8 +1,7 @@
 "use client";
 
-import { useState } from "react";
 import Link from "next/link";
-import { useLatestBlocks } from "@/lib/api/hooks/useBlocks";
+import { useLatestBlocksInfinite } from "@/lib/api/hooks/useBlocks";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -10,8 +9,6 @@ import { CopyButton } from "@/components/ui/copy-button";
 import {
   Blocks,
   Clock,
-  ChevronLeft,
-  ChevronRight,
   Database,
   Coins,
   Server
@@ -21,16 +18,16 @@ import { formatDistanceToNow } from "date-fns";
 const BLOCKS_PER_PAGE = 20;
 
 export function BlocksList() {
-  const [currentPage, setCurrentPage] = useState(1);
+  const {
+    data,
+    isLoading,
+    error,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useLatestBlocksInfinite(BLOCKS_PER_PAGE);
 
-  // Fetch more blocks than we need for pagination
-  const { data: blocks, isLoading, error } = useLatestBlocks(BLOCKS_PER_PAGE * 3);
-
-  // Calculate pagination values
-  const totalPages = blocks ? Math.ceil(blocks.length / BLOCKS_PER_PAGE) : 0;
-  const startIndex = (currentPage - 1) * BLOCKS_PER_PAGE;
-  const endIndex = startIndex + BLOCKS_PER_PAGE;
-  const currentBlocks = blocks ? blocks.slice(startIndex, endIndex) : [];
+  const blocks = data?.pages.flat() ?? [];
 
   if (error) {
     return (
@@ -81,7 +78,7 @@ export function BlocksList() {
     <div className="space-y-6">
       {/* Blocks List */}
       <div className="space-y-3">
-        {currentBlocks.map((block) => {
+        {(blocks ?? []).map((block) => {
           const nodeCount = block.nodeConfirmationCount ?? 0;
           const regularTxCount = block.regularTxCount ?? block.txlength ?? 0;
           const tierCounts = block.tierCounts ?? {
@@ -103,7 +100,7 @@ export function BlocksList() {
                         <div className="flex items-center gap-3">
                           <div className="flex items-center gap-2">
                             <Blocks className="h-5 w-5 text-primary" />
-                            <span className="text-2xl font-bold">
+                            <span className="text-lg font-bold">
                               #{block.height.toLocaleString()}
                             </span>
                           </div>
@@ -226,41 +223,22 @@ export function BlocksList() {
         })}
       </div>
 
-      {/* Pagination */}
-      {totalPages > 1 && (
-        <div className="flex items-center justify-between">
-          <div className="text-sm text-muted-foreground">
-            Showing {startIndex + 1}-{Math.min(endIndex, blocks.length)} of {blocks.length} blocks
-          </div>
-
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-              disabled={currentPage === 1}
-            >
-              <ChevronLeft className="h-4 w-4 mr-1" />
-              Previous
-            </Button>
-
-            <div className="flex items-center gap-1 px-3 py-1 text-sm">
-              Page <span className="font-medium">{currentPage}</span> of{" "}
-              <span className="font-medium">{totalPages}</span>
-            </div>
-
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-              disabled={currentPage === totalPages}
-            >
-              Next
-              <ChevronRight className="h-4 w-4 ml-1" />
-            </Button>
-          </div>
+      {/* Load More */}
+      <div className="flex items-center justify-between">
+        <div className="text-sm text-muted-foreground">
+          Showing latest {blocks?.length ?? 0} blocks
         </div>
-      )}
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            void fetchNextPage();
+          }}
+          disabled={!hasNextPage || isFetchingNextPage}
+        >
+          {isFetchingNextPage ? "Loading..." : "Load more"}
+        </Button>
+      </div>
 
       {/* Info Card */}
       <Card className="rounded-2xl border border-white/[0.08] bg-[linear-gradient(130deg,rgba(8,24,46,0.52),rgba(7,15,33,0.24))]">

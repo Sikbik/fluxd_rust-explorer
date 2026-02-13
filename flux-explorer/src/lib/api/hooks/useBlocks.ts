@@ -6,7 +6,14 @@
  * Now with adaptive polling based on API configuration.
  */
 
-import { useQuery, UseQueryOptions, UseQueryResult } from "@tanstack/react-query";
+import {
+  type InfiniteData,
+  useInfiniteQuery,
+  useQuery,
+  UseInfiniteQueryResult,
+  UseQueryOptions,
+  UseQueryResult,
+} from "@tanstack/react-query";
 import type { Block, BlockSummary } from "@/types/flux-api";
 import { getApiConfig } from "../config";
 import ky from "ky";
@@ -18,6 +25,7 @@ export const blockKeys = {
   all: ["blocks"] as const,
   lists: () => [...blockKeys.all, "list"] as const,
   list: (limit: number) => [...blockKeys.lists(), { limit }] as const,
+  infinite: (limit: number) => [...blockKeys.lists(), "infinite", { limit }] as const,
   details: () => [...blockKeys.all, "detail"] as const,
   detail: (hashOrHeight: string | number) => [...blockKeys.details(), hashOrHeight] as const,
   index: (height: number) => [...blockKeys.all, "index", height] as const,
@@ -156,5 +164,37 @@ export function useLatestBlocks(
     refetchIntervalInBackground: true,
     placeholderData: (previousData) => previousData,
     ...options,
+  });
+}
+
+/**
+ * Hook to fetch latest blocks in pages for infinite scroll.
+ */
+export function useLatestBlocksInfinite(
+  limit: number = 20
+): UseInfiniteQueryResult<InfiniteData<BlockSummary[]>, Error> {
+  const config = getApiConfig();
+  const effectiveLimit = Math.max(1, Math.floor(limit));
+
+  return useInfiniteQuery<BlockSummary[], Error, InfiniteData<BlockSummary[]>>({
+    queryKey: blockKeys.infinite(effectiveLimit),
+    initialPageParam: 0,
+    queryFn: ({ pageParam = 0 }) => {
+      const parsedOffset = Number(pageParam);
+      const offset = Number.isFinite(parsedOffset) ? Math.max(0, Math.floor(parsedOffset)) : 0;
+      return ky
+        .get("/api/blocks/latest", {
+          searchParams: {
+            limit: effectiveLimit.toString(),
+            offset: offset.toString(),
+          },
+        })
+        .json<BlockSummary[]>();
+    },
+    getNextPageParam: (lastPage, pages) =>
+      lastPage.length < effectiveLimit ? undefined : pages.length * effectiveLimit,
+    staleTime: config.staleTime,
+    refetchInterval: false,
+    refetchIntervalInBackground: false,
   });
 }

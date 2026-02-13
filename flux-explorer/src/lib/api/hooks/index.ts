@@ -10,6 +10,7 @@ export {
   useRawBlock,
   useBlockIndex,
   useLatestBlocks,
+  useLatestBlocksInfinite,
   blockKeys,
 } from "./useBlocks";
 
