@@ -7,22 +7,29 @@ BOOTSTRAP_FORMAT="${BOOTSTRAP_FORMAT:-auto}"
 BOOTSTRAP_RESET_ON_INCOMPLETE="${BOOTSTRAP_RESET_ON_INCOMPLETE:-1}"
 
 if [ -n "$BOOTSTRAP_URL" ]; then
+  BOOTSTRAP_URL_SAFE="${BOOTSTRAP_URL%%\?*}"
   BOOTSTRAP_DONE="${DATA_DIR}/.bootstrap_done"
   BOOTSTRAP_IN_PROGRESS="${DATA_DIR}/.bootstrap_in_progress"
   NEED_BOOTSTRAP=0
 
   if [ -f "$BOOTSTRAP_DONE" ]; then
+    echo "Bootstrap: already completed (marker present)."
     NEED_BOOTSTRAP=0
   elif [ -f "$BOOTSTRAP_IN_PROGRESS" ]; then
+    echo "Bootstrap: previous run interrupted; will retry."
     NEED_BOOTSTRAP=1
   else
     if [ ! -d "${DATA_DIR}/db" ] || [ -z "$(ls -A "${DATA_DIR}/db" 2>/dev/null)" ]; then
+      echo "Bootstrap: db is empty; will download ${BOOTSTRAP_URL_SAFE}"
       NEED_BOOTSTRAP=1
+    else
+      echo "Bootstrap: db exists; skipping bootstrap."
     fi
   fi
 
   if [ "$NEED_BOOTSTRAP" -eq 1 ]; then
     if [ -f "$BOOTSTRAP_IN_PROGRESS" ] && [ "$BOOTSTRAP_RESET_ON_INCOMPLETE" = "1" ]; then
+      echo "Bootstrap: resetting db/blocks from interrupted bootstrap."
       rm -rf "${DATA_DIR}/db" "${DATA_DIR}/blocks"
     elif [ -f "$BOOTSTRAP_IN_PROGRESS" ]; then
       echo "Bootstrap previously interrupted. Set BOOTSTRAP_RESET_ON_INCOMPLETE=1 to retry."
@@ -42,6 +49,7 @@ if [ -n "$BOOTSTRAP_URL" ]; then
       esac
     fi
 
+    echo "Bootstrap: starting (${FORMAT})..."
     if [ "$FORMAT" = "tar.gz" ]; then
       curl -fsSL "$BOOTSTRAP_URL" | tar -xzf - -C "$DATA_DIR"
     elif [ "$FORMAT" = "tar" ]; then
@@ -60,6 +68,7 @@ if [ -n "$BOOTSTRAP_URL" ]; then
 
     rm -f "$BOOTSTRAP_IN_PROGRESS"
     touch "$BOOTSTRAP_DONE"
+    echo "Bootstrap: completed."
   fi
 fi
 
