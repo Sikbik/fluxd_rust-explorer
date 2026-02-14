@@ -17,3 +17,5 @@ fluxd_rust/.cargo-home/
 fluxd_rust/.cargo_home/
 .cargo-home/
 .cargo_home/
+data*
+logs/

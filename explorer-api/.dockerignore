@@ -4,11 +4,8 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# Next.js
-.next
-out
+# Build output
 dist
-data
 
 # Testing
 coverage
@@ -19,14 +16,17 @@ coverage
 .env*.local
 .env.*
 
-# IDE
+# Data/artifacts
+data
+*.db
+*.sqlite
+
+# IDE/OS
 .vscode
 .idea
 *.swp
 *.swo
 *~
-
-# OS
 .DS_Store
 Thumbs.db
 
@@ -35,17 +35,6 @@ Thumbs.db
 .gitignore
 .github
 
-# Documentation (not needed in production)
-*.md
-!README.md
-
 # Docker
-Dockerfile*
 docker-compose*.yml
 .dockerignore
-
-# Misc
-.eslintcache
-.turbo
-*.db
-*.sqlite
