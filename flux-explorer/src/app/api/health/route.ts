@@ -24,7 +24,7 @@ async function checkEndpoint(url: string, type: 'local' | 'public'): Promise<Hea
   const startTime = Date.now();
 
   try {
-    await ky
+    const payload = await ky
       .get(`${url}/api/v1/status`, {
         timeout: 15000,
         retry: {
@@ -33,6 +33,26 @@ async function checkEndpoint(url: string, type: 'local' | 'public'): Promise<Hea
         },
       })
       .json();
+
+    const status = payload as { indexer?: { synced?: boolean; syncing?: boolean; currentHeight?: number; chainHeight?: number } };
+    const indexer = status?.indexer ?? {};
+    const currentHeight = Number(indexer.currentHeight ?? 0);
+    const chainHeight = Number(indexer.chainHeight ?? 0);
+    const lag = Math.max(0, chainHeight - currentHeight);
+    const synced =
+      typeof indexer.synced === 'boolean'
+        ? indexer.synced
+        : chainHeight > 0 && currentHeight >= Math.max(0, chainHeight - 2);
+
+    if (!synced) {
+      return {
+        endpoint: url,
+        type,
+        healthy: false,
+        responseTime: Date.now() - startTime,
+        error: `syncing (lag=${lag})`,
+      };
+    }
 
     return {
       endpoint: url,

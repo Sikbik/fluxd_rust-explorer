@@ -260,10 +260,49 @@ export function registerRoutes(app: Express, env: Env) {
 
     next();
   });
+  const SYNC_LAG_TOLERANCE = 2;
+
+  function computeSyncState(currentHeight: number, chainHeight: number): {
+    syncing: boolean;
+    synced: boolean;
+    lag: number;
+  } {
+    if (chainHeight <= 0) {
+      return { syncing: true, synced: false, lag: chainHeight - currentHeight };
+    }
+
+    const lag = Math.max(0, chainHeight - currentHeight);
+    const synced = currentHeight >= chainHeight - SYNC_LAG_TOLERANCE;
+    return { syncing: !synced, synced, lag };
+  }
+
   app.get('/health', async (_req: Request, res: Response) => {
     try {
-      await getDaemonStatus(env);
-      res.status(200).json({ ok: true, service: 'explorer-api', dependencies: { fluxd: 'ok' } });
+      const status = await getDaemonStatus(env);
+      const currentHeight = status.daemon?.blocks ?? 0;
+      const chainHeight = status.daemon?.headers ?? 0;
+      const syncState = computeSyncState(currentHeight, chainHeight);
+
+      if (!syncState.synced) {
+        res.status(503).json({
+          ok: false,
+          service: 'explorer-api',
+          dependencies: { fluxd: 'syncing' },
+          syncing: true,
+          currentHeight,
+          chainHeight,
+          lag: syncState.lag,
+        });
+        return;
+      }
+
+      res.status(200).json({
+        ok: true,
+        service: 'explorer-api',
+        dependencies: { fluxd: 'ok' },
+        currentHeight,
+        chainHeight,
+      });
     } catch {
       res.status(503).json({ ok: false, service: 'explorer-api', dependencies: { fluxd: 'error' } });
     }
@@ -271,8 +310,17 @@ export function registerRoutes(app: Express, env: Env) {
 
   app.get('/ready', async (_req: Request, res: Response) => {
     try {
-      await getDaemonStatus(env);
-      res.status(200).json({ ok: true });
+      const status = await getDaemonStatus(env);
+      const currentHeight = status.daemon?.blocks ?? 0;
+      const chainHeight = status.daemon?.headers ?? 0;
+      const syncState = computeSyncState(currentHeight, chainHeight);
+
+      if (!syncState.synced) {
+        res.status(503).json({ ok: false, syncing: true, currentHeight, chainHeight, lag: syncState.lag });
+        return;
+      }
+
+      res.status(200).json({ ok: true, currentHeight, chainHeight });
     } catch {
       res.status(503).json({ ok: false });
     }
@@ -360,17 +408,19 @@ export function registerRoutes(app: Express, env: Env) {
     const currentHeight = status.daemon?.blocks ?? 0;
     const chainHeight = status.daemon?.headers ?? 0;
     const progress = chainHeight > 0 ? String(currentHeight / chainHeight) : '0';
+    const syncState = computeSyncState(currentHeight, chainHeight);
 
     const payload = {
       ...status,
       indexer: {
-        syncing: currentHeight < chainHeight,
-        synced: currentHeight >= chainHeight,
+        syncing: syncState.syncing,
+        synced: syncState.synced,
         currentHeight,
         chainHeight,
         progress,
         lastSyncTime: nowIso,
         generatedAt: nowIso,
+        lag: syncState.lag,
       },
     };
 
@@ -902,16 +952,18 @@ export function registerRoutes(app: Express, env: Env) {
       const chainHeight = status.daemon?.headers ?? 0;
       const currentHeight = status.daemon?.blocks ?? 0;
       const percentage = chainHeight > 0 ? (currentHeight / chainHeight) * 100 : 0;
+      const syncState = computeSyncState(currentHeight, chainHeight);
 
       res.status(200).json({
         indexer: {
-          syncing: currentHeight < chainHeight,
-          synced: currentHeight >= chainHeight,
+          syncing: syncState.syncing,
+          synced: syncState.synced,
           currentHeight,
           chainHeight,
           progress: chainHeight > 0 ? String(currentHeight / chainHeight) : '0',
           percentage,
           lastSyncTime: null,
+          lag: syncState.lag,
         },
       });
     } catch (error) {

@@ -80,9 +80,9 @@ USER nextjs
 # Expose port
 EXPOSE 42069
 
-# Health check
+# Health check (fails while backend is still syncing)
 HEALTHCHECK --interval=30s --timeout=3s --start-period=40s --retries=3 \
-  CMD node -e "require('http').get('http://127.0.0.1:42069', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"
+  CMD node -e "require('http').get('http://127.0.0.1:42069/api/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"
 
 # Start application
 ENTRYPOINT ["/entrypoint.sh"]
