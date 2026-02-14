@@ -5,6 +5,7 @@ DATA_DIR="${DATA_DIR:-/data}"
 BOOTSTRAP_URL="${BOOTSTRAP_URL:-}"
 BOOTSTRAP_FORMAT="${BOOTSTRAP_FORMAT:-auto}"
 BOOTSTRAP_RESET_ON_INCOMPLETE="${BOOTSTRAP_RESET_ON_INCOMPLETE:-1}"
+BOOTSTRAP_PROGRESS="${BOOTSTRAP_PROGRESS:-1}"
 
 if [ -n "$BOOTSTRAP_URL" ]; then
   BOOTSTRAP_URL_SAFE="${BOOTSTRAP_URL%%\?*}"
@@ -49,14 +50,28 @@ if [ -n "$BOOTSTRAP_URL" ]; then
       esac
     fi
 
-    echo "Bootstrap: starting (${FORMAT})..."
+    echo "Bootstrap: starting (${FORMAT}) from ${BOOTSTRAP_URL_SAFE}..."
+    START_TS="$(date +%s 2>/dev/null || echo 0)"
+    CURL_FLAGS="-fL --retry 5 --retry-delay 2 --retry-all-errors"
     if [ "$FORMAT" = "tar.gz" ]; then
-      curl -fsSL "$BOOTSTRAP_URL" | tar -xzf - -C "$DATA_DIR"
+      if [ "$BOOTSTRAP_PROGRESS" = "1" ] || [ "$BOOTSTRAP_PROGRESS" = "true" ]; then
+        curl $CURL_FLAGS "$BOOTSTRAP_URL" | dd bs=4M status=progress | tar -xzf - -C "$DATA_DIR"
+      else
+        curl $CURL_FLAGS "$BOOTSTRAP_URL" | tar -xzf - -C "$DATA_DIR"
+      fi
     elif [ "$FORMAT" = "tar" ]; then
-      curl -fsSL "$BOOTSTRAP_URL" | tar -xf - -C "$DATA_DIR"
+      if [ "$BOOTSTRAP_PROGRESS" = "1" ] || [ "$BOOTSTRAP_PROGRESS" = "true" ]; then
+        curl $CURL_FLAGS "$BOOTSTRAP_URL" | dd bs=4M status=progress | tar -xf - -C "$DATA_DIR"
+      else
+        curl $CURL_FLAGS "$BOOTSTRAP_URL" | tar -xf - -C "$DATA_DIR"
+      fi
     elif [ "$FORMAT" = "tar.zst" ]; then
       if command -v zstd >/dev/null 2>&1; then
-        curl -fsSL "$BOOTSTRAP_URL" | zstd -d -c | tar -xf - -C "$DATA_DIR"
+        if [ "$BOOTSTRAP_PROGRESS" = "1" ] || [ "$BOOTSTRAP_PROGRESS" = "true" ]; then
+          curl $CURL_FLAGS "$BOOTSTRAP_URL" | dd bs=4M status=progress | zstd -d -c | tar -xf - -C "$DATA_DIR"
+        else
+          curl $CURL_FLAGS "$BOOTSTRAP_URL" | zstd -d -c | tar -xf - -C "$DATA_DIR"
+        fi
       else
         echo "Bootstrap format tar.zst requires zstd."
         exit 1
@@ -68,7 +83,12 @@ if [ -n "$BOOTSTRAP_URL" ]; then
 
     rm -f "$BOOTSTRAP_IN_PROGRESS"
     touch "$BOOTSTRAP_DONE"
-    echo "Bootstrap: completed."
+    END_TS="$(date +%s 2>/dev/null || echo 0)"
+    if [ "$START_TS" -gt 0 ] && [ "$END_TS" -gt 0 ]; then
+      echo "Bootstrap: completed in $((END_TS - START_TS))s."
+    else
+      echo "Bootstrap: completed."
+    fi
   fi
 fi
 
