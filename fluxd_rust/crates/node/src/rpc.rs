@@ -165,8 +165,8 @@ static ADDR_NEIGHBORS_REINDEX_IN_FLIGHT: std::sync::atomic::AtomicBool =
 static ADDR_NEIGHBORS_CATCHUP_IN_FLIGHT: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
-const ADDR_NEIGHBORS_CATCHUP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
-const ADDR_NEIGHBORS_CATCHUP_MAX_BLOCKS_PER_RUN: u32 = 750;
+const ADDR_NEIGHBORS_CATCHUP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+const ADDR_NEIGHBORS_CATCHUP_MAX_BLOCKS_PER_RUN: u32 = 3_000;
 
 fn richlist_cache() -> &'static std::sync::Mutex<Option<RichListCache>> {
     RICHLIST_CACHE.get_or_init(|| std::sync::Mutex::new(None))
@@ -14125,20 +14125,40 @@ fn schedule_address_neighbors_catchup<S: fluxd_storage::KeyValueStore + 'static>
         return;
     }
 
-    let gen = match index.active_generation() {
-        Ok(Some(gen)) if gen > 0 => gen,
-        _ => return,
-    };
-    let active_height = match index.active_height() {
-        Ok(Some(height)) => height,
-        _ => return,
-    };
-
     let best = match chainstate.best_block() {
         Ok(Some(tip)) => tip,
         _ => return,
     };
     let tip_height = best.height.max(0) as u32;
+
+    let gen = match index.active_generation() {
+        Ok(Some(gen)) if gen > 0 => gen,
+        _ => {
+            if tip_height == 0 {
+                return;
+            }
+            if ADDR_NEIGHBORS_REINDEX_IN_FLIGHT.load(Ordering::SeqCst) {
+                return;
+            }
+            let params = vec![json!({
+                "startHeight": 1u32,
+                "endHeight": tip_height,
+            })];
+            match rpc_startaddressneighborsreindex(Arc::clone(&chainstate), params) {
+                Ok(_) => log_info!(
+                    "address neighbor auto-reindex: started 1..{} (tip={})",
+                    tip_height,
+                    tip_height
+                ),
+                Err(err) => log_warn!("address neighbor auto-reindex failed: {}", err),
+            }
+            return;
+        }
+    };
+    let active_height = match index.active_height() {
+        Ok(Some(height)) => height,
+        _ => return,
+    };
 
     let reorg_depth = fluxd_consensus::constants::max_reorg_depth(best.height.max(0) as i64)
         .max(0) as u32;
