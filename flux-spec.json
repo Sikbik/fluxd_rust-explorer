@@ -1,0 +1,101 @@
+{
+  "version": 8,
+  "name": "explore",
+  "description": "Flux blockchain explorer (fluxd_rust + explorer-api + Next.js UI)",
+  "owner": "t1REPLACE_ME",
+  "compose": [
+    {
+      "name": "daemon",
+      "description": "fluxd_rust mainnet daemon",
+      "repotag": "littlestache/fluxd:latest",
+      "ports": [],
+      "domains": [],
+      "environmentParameters": [
+        "RUST_LOG=info"
+      ],
+      "commands": [
+        "--network",
+        "mainnet",
+        "--backend",
+        "fjall",
+        "--data-dir",
+        "/data",
+        "--params-dir",
+        "/data/params",
+        "--fetch-params",
+        "--rpc-addr",
+        "0.0.0.0:16124",
+        "--rpc-user",
+        "flux",
+        "--rpc-pass",
+        "flux",
+        "--rpc-allow-ip",
+        "0.0.0.0/0",
+        "--dashboard-addr",
+        "0.0.0.0:8080"
+      ],
+      "containerPorts": [],
+      "containerData": "/data",
+      "cpu": 2,
+      "ram": 6000,
+      "hdd": 100,
+      "repoauth": ""
+    },
+    {
+      "name": "api",
+      "description": "Explorer API adapter",
+      "repotag": "littlestache/explorer-api:latest",
+      "ports": [],
+      "domains": [],
+      "environmentParameters": [
+        "PORT=42067",
+        "FLUXD_RPC_URL=http://fluxdaemon_explore:16124",
+        "FLUXD_RPC_AUTH_MODE=basic",
+        "FLUXD_RPC_USER=flux",
+        "FLUXD_RPC_PASS=flux"
+      ],
+      "commands": [],
+      "containerPorts": [],
+      "containerData": "/tmp",
+      "cpu": 0.5,
+      "ram": 500,
+      "hdd": 5,
+      "repoauth": ""
+    },
+    {
+      "name": "web",
+      "description": "Flux explorer UI",
+      "repotag": "littlestache/flux-explorer:latest",
+      "ports": [
+        42069
+      ],
+      "domains": [
+        ""
+      ],
+      "environmentParameters": [
+        "NODE_ENV=production",
+        "NEXT_TELEMETRY_DISABLED=1",
+        "HOSTNAME=0.0.0.0",
+        "PORT=42069",
+        "SERVER_API_URL=http://fluxapi_explore:42067",
+        "NEXT_PUBLIC_API_URL=http://fluxapi_explore:42067"
+      ],
+      "commands": [],
+      "containerPorts": [
+        42069
+      ],
+      "containerData": "/app/data",
+      "cpu": 0.5,
+      "ram": 1000,
+      "hdd": 10,
+      "repoauth": ""
+    }
+  ],
+  "instances": 3,
+  "contacts": [],
+  "geolocation": [],
+  "expire": 22000,
+  "nodes": [],
+  "staticip": false,
+  "enterprise": ""
+}
