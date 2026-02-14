@@ -18,13 +18,17 @@ FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    curl \
     libssl3 \
+    zstd \
   && rm -rf /var/lib/apt/lists/*
 
 RUN useradd -r -u 10001 -m -d /home/fluxd fluxd
 
 COPY --from=builder /src/target/release/fluxd /usr/local/bin/fluxd
 COPY --from=builder /src/target/release/fluxd-cli /usr/local/bin/fluxd-cli
+COPY docker/entrypoint.sh /entrypoint.sh
+RUN chmod 755 /entrypoint.sh
 
 USER fluxd
 WORKDIR /data
@@ -34,5 +38,5 @@ VOLUME ["/data"]
 # P2P (mainnet/testnet/regtest), RPC, and dashboard ports.
 EXPOSE 16125 26125 36125 16124 26124 36124 8080
 
-ENTRYPOINT ["/usr/local/bin/fluxd-cli"]
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["--network","mainnet","--backend","fjall","--data-dir","/data","--params-dir","/data/params","--fetch-params","--rpc-addr","0.0.0.0:16124","--dashboard-addr","0.0.0.0:8080"]

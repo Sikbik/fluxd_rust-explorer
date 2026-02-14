@@ -13,6 +13,7 @@ export interface FluxdStatus {
     protocolVersion: number;
     blocks: number;
     headers: number;
+    networkHeight: number;
     bestBlockHash: string;
     difficulty: number;
     chainwork: string;
@@ -158,6 +159,7 @@ export async function getDaemonStatus(env: Env): Promise<FluxdStatus> {
         protocolVersion: 170013,
         blocks: 1,
         headers: 1,
+        networkHeight: 1,
         bestBlockHash: '0'.repeat(64),
         difficulty: 1,
         chainwork: '0x00',
@@ -168,10 +170,11 @@ export async function getDaemonStatus(env: Env): Promise<FluxdStatus> {
     };
   }
 
-  const [infoRaw, chainInfoRaw, netInfoRaw] = await Promise.all([
+  const [infoRaw, chainInfoRaw, netInfoRaw, peerInfoRaw] = await Promise.all([
     fluxdDaemonGet<unknown>(env, 'getinfo'),
     fluxdDaemonGet<unknown>(env, 'getblockchaininfo'),
     fluxdDaemonGet<unknown>(env, 'getnetworkinfo'),
+    fluxdDaemonGet<unknown>(env, 'getpeerinfo'),
   ]);
 
   const info = requireObject(infoRaw, 'getinfo');
@@ -180,6 +183,12 @@ export async function getDaemonStatus(env: Env): Promise<FluxdStatus> {
 
   const blocks = requireNumber(info.blocks ?? chainInfo.blocks, 'blocks');
   const headers = requireNumber(info.headers ?? chainInfo.headers, 'headers');
+  const peers = Array.isArray(peerInfoRaw) ? peerInfoRaw : [];
+  const peerHeights = peers
+    .map((peer) => Number((peer as { startingheight?: unknown }).startingheight))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  const peerBest = peerHeights.length > 0 ? Math.max(...peerHeights) : 0;
+  const networkHeight = Math.max(headers, peerBest);
 
   return {
     name: 'fluxd_rust',
@@ -191,6 +200,7 @@ export async function getDaemonStatus(env: Env): Promise<FluxdStatus> {
       protocolVersion: requireNumber(info.protocolversion ?? info.protocolVersion ?? 0, 'protocolVersion'),
       blocks,
       headers,
+      networkHeight,
       bestBlockHash: requireString(chainInfo.bestblockhash ?? '', 'bestBlockHash'),
       difficulty: requireNumber(chainInfo.difficulty ?? 0, 'difficulty'),
       chainwork: String(chainInfo.chainwork ?? ''),

@@ -262,11 +262,14 @@ export function registerRoutes(app: Express, env: Env) {
   });
   const SYNC_LAG_TOLERANCE = 2;
 
-  function computeSyncState(currentHeight: number, chainHeight: number): {
+  function computeSyncState(currentHeight: number, chainHeight: number, connections: number): {
     syncing: boolean;
     synced: boolean;
     lag: number;
   } {
+    if (connections <= 0) {
+      return { syncing: true, synced: false, lag: Math.max(0, chainHeight - currentHeight) };
+    }
     if (chainHeight <= 0) {
       return { syncing: true, synced: false, lag: chainHeight - currentHeight };
     }
@@ -280,8 +283,9 @@ export function registerRoutes(app: Express, env: Env) {
     try {
       const status = await getDaemonStatus(env);
       const currentHeight = status.daemon?.blocks ?? 0;
-      const chainHeight = status.daemon?.headers ?? 0;
-      const syncState = computeSyncState(currentHeight, chainHeight);
+      const chainHeight = status.daemon?.networkHeight ?? status.daemon?.headers ?? 0;
+      const connections = status.daemon?.connections ?? 0;
+      const syncState = computeSyncState(currentHeight, chainHeight, connections);
 
       if (!syncState.synced) {
         res.status(503).json({
@@ -312,8 +316,9 @@ export function registerRoutes(app: Express, env: Env) {
     try {
       const status = await getDaemonStatus(env);
       const currentHeight = status.daemon?.blocks ?? 0;
-      const chainHeight = status.daemon?.headers ?? 0;
-      const syncState = computeSyncState(currentHeight, chainHeight);
+      const chainHeight = status.daemon?.networkHeight ?? status.daemon?.headers ?? 0;
+      const connections = status.daemon?.connections ?? 0;
+      const syncState = computeSyncState(currentHeight, chainHeight, connections);
 
       if (!syncState.synced) {
         res.status(503).json({ ok: false, syncing: true, currentHeight, chainHeight, lag: syncState.lag });
@@ -406,9 +411,10 @@ export function registerRoutes(app: Express, env: Env) {
 
     const nowIso = new Date().toISOString();
     const currentHeight = status.daemon?.blocks ?? 0;
-    const chainHeight = status.daemon?.headers ?? 0;
+    const chainHeight = status.daemon?.networkHeight ?? status.daemon?.headers ?? 0;
     const progress = chainHeight > 0 ? String(currentHeight / chainHeight) : '0';
-    const syncState = computeSyncState(currentHeight, chainHeight);
+    const connections = status.daemon?.connections ?? 0;
+    const syncState = computeSyncState(currentHeight, chainHeight, connections);
 
     const payload = {
       ...status,
@@ -949,10 +955,11 @@ export function registerRoutes(app: Express, env: Env) {
   app.get('/api/v1/sync', async (_req: Request, res: Response) => {
     try {
       const status = await getDaemonStatus(env);
-      const chainHeight = status.daemon?.headers ?? 0;
       const currentHeight = status.daemon?.blocks ?? 0;
+      const chainHeight = status.daemon?.networkHeight ?? status.daemon?.headers ?? 0;
       const percentage = chainHeight > 0 ? (currentHeight / chainHeight) * 100 : 0;
-      const syncState = computeSyncState(currentHeight, chainHeight);
+      const connections = status.daemon?.connections ?? 0;
+      const syncState = computeSyncState(currentHeight, chainHeight, connections);
 
       res.status(200).json({
         indexer: {
