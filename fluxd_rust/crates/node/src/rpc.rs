@@ -13220,42 +13220,42 @@ fn rpc_getaddresstxids<S: fluxd_storage::KeyValueStore>(
     }
     let (addresses, opts) = parse_addresses_param(&params[0])?;
     let range = parse_height_range(chainstate, opts)?;
-    let address_scripts = decode_address_scripts(addresses, chain_params.network)?;
+	    let address_scripts = decode_address_scripts(addresses, chain_params.network)?;
 
-    if address_scripts.len() == 1 {
-        let (_address, script_pubkey) = address_scripts
-            .into_iter()
-            .next()
-            .expect("single address");
+	    if address_scripts.len() == 1 {
+	        let (_address, script_pubkey) = address_scripts
+	            .into_iter()
+	            .next()
+	            .expect("single address");
 
-        let Some(script_hash) = fluxd_chainstate::address_index::script_hash(&script_pubkey) else {
-            return Ok(Value::Number(0u64.into()));
-        };
+	        let Some(script_hash) = fluxd_chainstate::address_index::script_hash(&script_pubkey) else {
+	            return Ok(Value::Array(Vec::new()));
+	        };
 
-        let mut count: u64 = 0;
-        let mut last: Option<(u32, u32, Hash256)> = None;
+	        let mut txids: Vec<String> = Vec::new();
+	        let mut last: Option<(u32, u32, Hash256)> = None;
 
-        let mut visitor = |delta: fluxd_chainstate::address_deltas::AddressDeltaEntry| {
-            let current = (delta.height, delta.tx_index, delta.txid);
-            if last.map_or(true, |prev| prev != current) {
-                count = count.saturating_add(1);
-                last = Some(current);
-            }
-            Ok(())
-        };
+	        let mut visitor = |delta: fluxd_chainstate::address_deltas::AddressDeltaEntry| {
+	            let current = (delta.height, delta.tx_index, delta.txid);
+	            if last.map_or(true, |prev| prev != current) {
+	                txids.push(hash256_to_hex(&delta.txid));
+	                last = Some(current);
+	            }
+	            Ok(())
+	        };
 
-        if let Some((start, end)) = range {
-            chainstate
-                .for_each_address_delta_range(&script_hash, start, end, &mut visitor)
-                .map_err(map_internal)?;
-        } else {
-            chainstate
-                .for_each_address_delta(&script_pubkey, &mut visitor)
-                .map_err(map_internal)?;
-        }
+	        if let Some((start, end)) = range {
+	            chainstate
+	                .for_each_address_delta_range(&script_hash, start, end, &mut visitor)
+	                .map_err(map_internal)?;
+	        } else {
+	            chainstate
+	                .for_each_address_delta(&script_pubkey, &mut visitor)
+	                .map_err(map_internal)?;
+	        }
 
-        return Ok(Value::Number(count.into()));
-    }
+	        return Ok(Value::Array(txids.into_iter().map(Value::String).collect()));
+	    }
 
     let mut txids = std::collections::BTreeSet::<(u32, Hash256)>::new();
     for (_address, script_pubkey) in address_scripts {
