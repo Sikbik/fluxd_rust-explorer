@@ -10,4 +10,4 @@ COPY . .
 ENV PLAYWRIGHT_BASE_URL=http://flux-explorer:42069
 ENV CI=true
 
-CMD ["npm","run","test:e2e:smoke"]
+CMD ["npm","run","test:e2e:ui"]

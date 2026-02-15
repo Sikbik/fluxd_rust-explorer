@@ -31,6 +31,7 @@
     "lint": "next lint",
     "test:e2e": "playwright test",
     "test:e2e:smoke": "playwright test e2e/smoke.spec.ts",
+    "test:e2e:ui": "playwright test e2e/smoke.spec.ts e2e/ui-deep.spec.ts e2e/constellation.spec.ts",
     "populate-prices": "tsx scripts/populate-price-history.ts",
     "update-prices": "tsx scripts/populate-price-history.ts daily"
   },

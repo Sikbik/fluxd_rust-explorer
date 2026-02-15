@@ -6,20 +6,14 @@ services:
     build:
       context: ./explorer-api
       dockerfile: Dockerfile
-    container_name: explorer-api
-    restart: unless-stopped
     environment:
       - PORT=42067
       - FIXTURES_MODE=1
-    ports:
-      - "42067:42067"
 
   flux-explorer:
     build:
       context: ./flux-explorer
       dockerfile: Dockerfile
-    container_name: flux-explorer
-    restart: unless-stopped
     environment:
       - NODE_ENV=production
       - NEXT_TELEMETRY_DISABLED=1
@@ -29,18 +23,17 @@ services:
       - NEXT_PUBLIC_API_URL=http://explorer-api:42067
     depends_on:
       - explorer-api
-    ports:
-      - "42069:42069"
 
   e2e:
     build:
       context: ./flux-explorer
       dockerfile: Dockerfile.e2e
-    container_name: flux-explorer-e2e
     depends_on:
       - flux-explorer
+    shm_size: "1gb"
     environment:
       - PLAYWRIGHT_BASE_URL=http://flux-explorer:42069
       - CI=true
-
-
+    volumes:
+      - ./flux-explorer/test-results:/app/test-results
+      - ./flux-explorer/playwright-report:/app/playwright-report

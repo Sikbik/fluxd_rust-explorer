@@ -1,4 +1,9 @@
 import { test, expect } from '@playwright/test';
+import { preparePage } from './helpers/e2e-utils';
+
+test.beforeEach(async ({ page }) => {
+  await preparePage(page);
+});
 
 test('home loads and shows core sections', async ({ page }) => {
   await page.goto('/');
@@ -46,7 +51,7 @@ test('address page renders core fields or error state', async ({ page }) => {
   const fakeAddress = 't1' + 'a'.repeat(33);
   await page.goto(`/address/${fakeAddress}`);
 
-  const addressHeading = page.getByRole('heading', { name: 'Address' });
+  const addressHeading = page.getByRole('heading', { name: /^Address/, level: 1 });
   const errorLabel = page.getByText('Error Loading Address');
 
   await expect(addressHeading.or(errorLabel)).toBeVisible();

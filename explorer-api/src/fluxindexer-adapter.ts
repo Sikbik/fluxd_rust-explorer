@@ -410,6 +410,18 @@ const FIXTURE_BLOCK_1: FixtureBlock = {
   ],
 };
 
+const FIXTURE_TIMESTAMP_SEC = 1700000000;
+const FIXTURE_CENTER_ADDRESS = 't1' + 'A'.repeat(33);
+const FIXTURE_NEIGHBOR_B = 't1' + 'B'.repeat(33);
+const FIXTURE_NEIGHBOR_C = 't1' + 'C'.repeat(33);
+const FIXTURE_NEIGHBOR_D = 't1' + 'D'.repeat(33);
+const FIXTURE_NEIGHBOR_E = 't1' + 'E'.repeat(33);
+const FIXTURE_NEIGHBOR_F = 't1' + 'F'.repeat(33);
+const FIXTURE_NEIGHBOR_G = 't1' + 'G'.repeat(33);
+const FIXTURE_NEIGHBOR_H = 't1' + 'H'.repeat(33);
+const FIXTURE_NEIGHBOR_I = 't1' + 'I'.repeat(33);
+const FIXTURE_NEIGHBOR_J = 't1' + 'J'.repeat(33);
+
 function fixturesGet(method: string, params?: Record<string, string | number | boolean>): FixtureResponse {
   if (method === 'getblockcount') {
     return FIXTURE_BLOCK_1.height;
@@ -492,7 +504,7 @@ function fixturesGet(method: string, params?: Record<string, string | number | b
   }
 
   if (method === 'gettxstats') {
-    const now = String(Math.floor(Date.now() / 1000));
+    const now = String(FIXTURE_TIMESTAMP_SEC);
     return {
       low: 0,
       high: 0,
@@ -532,7 +544,7 @@ function fixturesGet(method: string, params?: Record<string, string | number | b
   }
 
   if (method === 'getrichlist') {
-    const lastUpdate = String(Math.floor(Date.now() / 1000));
+    const lastUpdate = String(FIXTURE_TIMESTAMP_SEC);
     return {
       lastUpdate,
       generatedAt: lastUpdate,
@@ -611,12 +623,199 @@ function fixturesGet(method: string, params?: Record<string, string | number | b
     return { balance: '0', received: '0', cumulusCount: 0, nimbusCount: 0, stratusCount: 0 };
   }
 
+  if (method === 'getaddressneighbors') {
+    const rawParams = params?.params;
+    const decoded = typeof rawParams === 'string' ? JSON.parse(rawParams) : [];
+    const request = decoded?.[0] ?? {};
+    const address =
+      typeof request?.addresses?.[0] === 'string' && request.addresses[0].length > 0
+        ? String(request.addresses[0])
+        : FIXTURE_CENTER_ADDRESS;
+    const limitRaw = request?.limit;
+    const limit =
+      typeof limitRaw === 'number' && Number.isFinite(limitRaw)
+        ? Math.max(1, Math.min(200, Math.trunc(limitRaw)))
+        : 50;
+
+    const neighborMap: Record<string, Array<any>> = {
+      [FIXTURE_CENTER_ADDRESS]: [
+        {
+          address: FIXTURE_NEIGHBOR_B,
+          txCount: 18,
+          inboundTxCount: 10,
+          outboundTxCount: 8,
+          totalValueSat: '126000000000',
+          inboundValueSat: '72000000000',
+          outboundValueSat: '54000000000',
+        },
+        {
+          address: FIXTURE_NEIGHBOR_C,
+          txCount: 12,
+          inboundTxCount: 5,
+          outboundTxCount: 7,
+          totalValueSat: '84000000000',
+          inboundValueSat: '36000000000',
+          outboundValueSat: '48000000000',
+        },
+        {
+          address: FIXTURE_NEIGHBOR_D,
+          txCount: 9,
+          inboundTxCount: 6,
+          outboundTxCount: 3,
+          totalValueSat: '39000000000',
+          inboundValueSat: '26000000000',
+          outboundValueSat: '13000000000',
+        },
+        {
+          address: FIXTURE_NEIGHBOR_E,
+          txCount: 6,
+          inboundTxCount: 2,
+          outboundTxCount: 4,
+          totalValueSat: '18000000000',
+          inboundValueSat: '5000000000',
+          outboundValueSat: '13000000000',
+        },
+      ],
+      [FIXTURE_NEIGHBOR_B]: [
+        {
+          address: FIXTURE_CENTER_ADDRESS,
+          txCount: 18,
+          inboundTxCount: 8,
+          outboundTxCount: 10,
+          totalValueSat: '126000000000',
+          inboundValueSat: '54000000000',
+          outboundValueSat: '72000000000',
+        },
+        {
+          address: FIXTURE_NEIGHBOR_F,
+          txCount: 5,
+          inboundTxCount: 2,
+          outboundTxCount: 3,
+          totalValueSat: '22000000000',
+          inboundValueSat: '9000000000',
+          outboundValueSat: '13000000000',
+        },
+        {
+          address: FIXTURE_NEIGHBOR_G,
+          txCount: 4,
+          inboundTxCount: 1,
+          outboundTxCount: 3,
+          totalValueSat: '17000000000',
+          inboundValueSat: '2000000000',
+          outboundValueSat: '15000000000',
+        },
+      ],
+      [FIXTURE_NEIGHBOR_C]: [
+        {
+          address: FIXTURE_CENTER_ADDRESS,
+          txCount: 12,
+          inboundTxCount: 7,
+          outboundTxCount: 5,
+          totalValueSat: '84000000000',
+          inboundValueSat: '48000000000',
+          outboundValueSat: '36000000000',
+        },
+        {
+          address: FIXTURE_NEIGHBOR_H,
+          txCount: 4,
+          inboundTxCount: 3,
+          outboundTxCount: 1,
+          totalValueSat: '14000000000',
+          inboundValueSat: '9000000000',
+          outboundValueSat: '5000000000',
+        },
+        {
+          address: FIXTURE_NEIGHBOR_I,
+          txCount: 3,
+          inboundTxCount: 1,
+          outboundTxCount: 2,
+          totalValueSat: '9000000000',
+          inboundValueSat: '4000000000',
+          outboundValueSat: '5000000000',
+        },
+      ],
+      [FIXTURE_NEIGHBOR_D]: [
+        {
+          address: FIXTURE_CENTER_ADDRESS,
+          txCount: 9,
+          inboundTxCount: 3,
+          outboundTxCount: 6,
+          totalValueSat: '39000000000',
+          inboundValueSat: '13000000000',
+          outboundValueSat: '26000000000',
+        },
+        {
+          address: FIXTURE_NEIGHBOR_J,
+          txCount: 2,
+          inboundTxCount: 1,
+          outboundTxCount: 1,
+          totalValueSat: '7000000000',
+          inboundValueSat: '3500000000',
+          outboundValueSat: '3500000000',
+        },
+      ],
+      [FIXTURE_NEIGHBOR_E]: [
+        {
+          address: FIXTURE_CENTER_ADDRESS,
+          txCount: 6,
+          inboundTxCount: 4,
+          outboundTxCount: 2,
+          totalValueSat: '18000000000',
+          inboundValueSat: '13000000000',
+          outboundValueSat: '5000000000',
+        },
+      ],
+    };
+
+    const neighbors = neighborMap[address] ?? [];
+    return {
+      address,
+      generation: 1,
+      neighbors: neighbors.slice(0, limit),
+    };
+  }
+
+  if (method === 'getaddressutxobalances') {
+    const rawParams = params?.params;
+    const decoded = typeof rawParams === 'string' ? JSON.parse(rawParams) : [];
+    const request = decoded?.[0] ?? {};
+    const addresses = Array.isArray(request?.addresses) ? request.addresses.map((entry: unknown) => String(entry)) : [];
+
+    const balancesByAddress: Record<string, string> = {
+      [FIXTURE_CENTER_ADDRESS]: '123450000000',
+      [FIXTURE_NEIGHBOR_B]: '80400000000',
+      [FIXTURE_NEIGHBOR_C]: '64000000000',
+      [FIXTURE_NEIGHBOR_D]: '12500000000',
+      [FIXTURE_NEIGHBOR_E]: '9000000000',
+      [FIXTURE_NEIGHBOR_F]: '4200000000',
+      [FIXTURE_NEIGHBOR_G]: '3800000000',
+      [FIXTURE_NEIGHBOR_H]: '5100000000',
+      [FIXTURE_NEIGHBOR_I]: '2300000000',
+      [FIXTURE_NEIGHBOR_J]: '1700000000',
+    };
+
+    return {
+      hash: FIXTURE_BLOCK_1.hash,
+      height: FIXTURE_BLOCK_1.height,
+      balances: addresses.map((entry: string) => ({
+        address: entry,
+        balanceSat: balancesByAddress[entry] ?? null,
+        utxoCount: balancesByAddress[entry] ? 12 : 0,
+        truncated: false,
+      })),
+    };
+  }
+
   if (method === 'getaddressutxos') {
     return [];
   }
 
   if (method === 'getaddresstxids') {
     return [];
+  }
+
+  if (method === 'getaddresstxidscount') {
+    return 0;
   }
 
   if (method === 'getinfo') {
